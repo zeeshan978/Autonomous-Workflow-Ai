@@ -192,6 +192,26 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return { error: null };
   };
 
+  const signInWithGoogle = async () => {
+    setState(prev => ({ ...prev, loading: true, error: null }));
+    const { error } = await supabase.auth.signInWithOAuth({
+      provider: 'google',
+      options: {
+        redirectTo: window.location.origin
+      }
+    });
+
+    if (error) {
+      setState(prev => ({ ...prev, loading: false, error: error.message }));
+      return { error: error.message };
+    }
+
+    // Note: For OAuth, the redirect happens automatically.
+    // We don't need to manually fetch data here because the redirect will reload the page,
+    // and the useEffect will pick up the new session via getSession() or onAuthStateChange().
+    return { error: null };
+  };
+
   const signOut = async () => {
     await supabase.auth.signOut();
   };
@@ -252,6 +272,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         ...state,
         signUp,
         signIn,
+        signInWithGoogle,
         signOut,
         resetPassword,
         updatePassword,
