@@ -1,0 +1,421 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 0 0% 100%;
+    --foreground: 240 10% 3.9%;
+    --card: 0 0% 100%;
+    --card-foreground: 240 10% 3.9%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 240 10% 3.9%;
+    --primary: 252 82% 67%;
+    --primary-foreground: 0 0% 98%;
+    --secondary: 240 4.8% 95.9%;
+    --secondary-foreground: 240 5.9% 10%;
+    --muted: 240 4.8% 95.9%;
+    --muted-foreground: 240 3.8% 46.1%;
+    --accent: 240 4.8% 95.9%;
+    --accent-foreground: 240 5.9% 10%;
+    --destructive: 0 84.2% 60.2%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 240 5.9% 90%;
+    --input: 240 5.9% 90%;
+    --ring: 252 82% 67%;
+    --radius: 1rem;
+    --bg-grad-start: rgba(240, 240, 250, 0.5);
+    --bg-grad-end: rgba(255, 255, 255, 1);
+    --radius: 1rem;
+    --chart-1: 252 82% 67%;
+    --chart-2: 300 70% 60%;
+    --chart-3: 160 60% 45%;
+    --chart-4: 280 65% 60%;
+    --chart-5: 340 75% 55%;
+    --success: 142.1 76.2% 36.3%;
+    --warning: 38 92% 50%;
+    --error: 0 84.2% 60.2%;
+  }
+
+  .dark {
+    --background: 240 10% 3.9%;
+    --foreground: 0 0% 98%;
+    --card: 240 10% 3.9%;
+    --card-foreground: 0 0% 98%;
+    --popover: 240 10% 3.9%;
+    --popover-foreground: 0 0% 98%;
+    --primary: 252 82% 67%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 240 4.8% 12%;
+    --secondary-foreground: 0 0% 98%;
+    --muted: 240 4.8% 16%;
+    --muted-foreground: 240 5% 64.9%;
+    --accent: 252 82% 67%;
+    --accent-foreground: 0 0% 100%;
+    --destructive: 0 62.8% 30.6%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 240 3.7% 15.9%;
+    --input: 240 3.7% 15.9%;
+    --ring: 252 82% 67%;
+    --bg-grad-start: rgba(30, 30, 40, 0.5);
+    --bg-grad-end: rgba(10, 10, 12, 1);
+  }
+
+  /* Dynamic Accent Colors */
+  .accent-blue {
+    --primary: 221.2 83.2% 53.3%;
+    --ring: 221.2 83.2% 53.3%;
+  }
+  .accent-emerald {
+    --primary: 142.1 76.2% 36.3%;
+    --ring: 142.1 76.2% 36.3%;
+  }
+  .accent-orange {
+    --primary: 24.6 95% 53.1%;
+    --ring: 24.6 95% 53.1%;
+  }
+  .accent-rose {
+    --primary: 346.8 77.2% 49.8%;
+    --ring: 346.8 77.2% 49.8%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground;
+    font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    letter-spacing: 0.015em;
+    line-height: 1.6;
+    font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    /* Soft noise background overlay for premium feel */
+    background-image: radial-gradient(circle at center, var(--bg-grad-start) 0%, var(--bg-grad-end) 100%);
+    background-attachment: fixed;
+  }
+
+  h1, h2, h3, h4, h5, h6 {
+    @apply font-semibold tracking-tight;
+  }
+
+  h1 {
+    @apply text-3xl md:text-4xl;
+  }
+
+  h2 {
+    @apply text-2xl md:text-3xl;
+  }
+
+  h3 {
+    @apply text-xl md:text-2xl;
+  }
+}
+
+@layer utilities {
+  .scrollbar-thin {
+    scrollbar-width: thin;
+    scrollbar-color: hsl(var(--muted)) transparent;
+  }
+
+  .scrollbar-thin::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+
+  .scrollbar-thin::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  .scrollbar-thin::-webkit-scrollbar-thumb {
+    background: hsl(var(--muted));
+    border-radius: 10px;
+  }
+
+  .scrollbar-thin::-webkit-scrollbar-thumb:hover {
+    background: hsl(var(--muted-foreground));
+  }
+
+  /* Premium SaaS Transitions */
+  .transition-premium {
+    transition-property: color, background-color, border-color, text-decoration-color, fill, stroke, opacity, box-shadow, transform, filter, backdrop-filter;
+    transition-timing-function: cubic-bezier(0.22, 1, 0.36, 1);
+    transition-duration: 300ms;
+  }
+
+  /* Page Transitions */
+  @keyframes fade-in-up {
+    from {
+      opacity: 0;
+      transform: translateY(10px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
+  .animate-fade-in-up {
+    animation: fade-in-up 0.4s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+  }
+
+  /* Lumora Glass Panels */
+  .glass-panel {
+    @apply bg-background/60 backdrop-blur-xl shadow-2xl;
+    border: 1px solid hsl(var(--border) / 0.3);
+  }
+  
+  .glass-card {
+    @apply bg-card/60 backdrop-blur-md shadow-xl transition-premium;
+    border: 1px solid hsl(var(--border) / 0.2);
+    position: relative;
+    overflow: hidden;
+  }
+  
+  .glass-card::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(180deg, hsl(var(--primary) / 0.05) 0%, transparent 100%);
+    opacity: 0;
+    transition: opacity 300ms cubic-bezier(0.22, 1, 0.36, 1);
+    pointer-events: none;
+  }
+
+  .glass-card:hover {
+    @apply bg-card/70 shadow-2xl;
+    transform: translateY(-4px) scale(1.02);
+    border-color: hsl(var(--primary) / 0.4);
+    box-shadow: 0 20px 40px -10px hsl(var(--primary) / 0.15), 0 0 15px -3px hsl(var(--primary) / 0.1);
+  }
+  
+  .glass-card:hover::after {
+    opacity: 1;
+  }
+
+  /* Apply liquid glass to global elements */
+  .glass-input {
+    @apply bg-background/40 backdrop-blur-md border-white/10 shadow-inner focus:border-primary/50 focus:bg-background/60 transition-all duration-300;
+  }
+
+  /* CSS Ripple & Button Effects */
+  .btn-premium {
+    @apply transition-premium;
+    position: relative;
+    overflow: hidden;
+  }
+  
+  .btn-premium:hover {
+    transform: scale(1.03);
+    box-shadow: 0 4px 15px -3px hsl(var(--primary) / 0.2), 0 0 8px -2px hsl(var(--primary) / 0.1);
+  }
+  
+  .btn-premium:active {
+    transform: scale(0.97);
+  }
+
+  .ripple::after {
+    content: "";
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 100%;
+    padding-top: 100%;
+    background: radial-gradient(circle, hsl(var(--primary) / 0.3) 10%, transparent 10.01%);
+    background-repeat: no-repeat;
+    background-position: 50%;
+    transform: translate(-50%, -50%) scale(10);
+    opacity: 0;
+    transition: transform 0.5s, opacity 1s;
+    pointer-events: none;
+  }
+  .ripple:active::after {
+    transform: translate(-50%, -50%) scale(0);
+    opacity: 1;
+    transition: 0s;
+  }
+
+  /* Shimmer Skeleton */
+  @keyframes shimmer {
+    0% { background-position: 200% 0; }
+    100% { background-position: -200% 0; }
+  }
+
+  .animate-pulse {
+    background: linear-gradient(90deg, hsl(var(--muted) / 0.3) 25%, hsl(var(--muted) / 0.8) 50%, hsl(var(--muted) / 0.3) 75%);
+    background-size: 400% 100%;
+    animation: shimmer 2s infinite linear !important;
+  }
+
+  @keyframes toast-progress {
+    from { width: 100%; }
+    to { width: 0%; }
+  }
+}
+
+/* React Flow Premium Styles */
+.react-flow__node {
+  cursor: pointer;
+}
+
+.react-flow__handle {
+  width: 14px;
+  height: 14px;
+  background: hsl(var(--primary));
+  border: 3px solid hsl(var(--background));
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+  box-shadow: 0 0 10px hsl(var(--primary) / 0.5);
+}
+
+.react-flow__handle:hover {
+  transform: scale(1.3);
+  box-shadow: 0 0 15px hsl(var(--primary) / 0.8);
+  animation: pulse-handle 1.5s infinite;
+}
+
+@keyframes pulse-handle {
+  0% { box-shadow: 0 0 0 0 hsl(var(--primary) / 0.7); }
+  70% { box-shadow: 0 0 0 10px hsl(var(--primary) / 0); }
+  100% { box-shadow: 0 0 0 0 hsl(var(--primary) / 0); }
+}
+
+.react-flow__edge-path {
+  stroke: hsl(var(--primary));
+  stroke-width: 3;
+  opacity: 0.7;
+  transition: stroke-width 0.2s ease, opacity 0.2s ease;
+}
+
+.react-flow__edge:hover .react-flow__edge-path {
+  stroke: hsl(var(--primary));
+  stroke-width: 4;
+  opacity: 1;
+  filter: drop-shadow(0 0 5px hsl(var(--primary) / 0.5));
+}
+
+.react-flow__edge.selected .react-flow__edge-path {
+  stroke: hsl(var(--primary));
+  stroke-width: 4;
+  opacity: 1;
+  filter: drop-shadow(0 0 8px hsl(var(--primary) / 0.8));
+}
+
+@keyframes edge-dash {
+  to { stroke-dashoffset: -20; }
+}
+
+.edge-executing .react-flow__edge-path {
+  stroke: hsl(var(--primary));
+  stroke-width: 4;
+  stroke-dasharray: 5 5;
+  animation: edge-dash 0.5s linear infinite;
+  filter: drop-shadow(0 0 8px hsl(var(--primary)));
+}
+
+@keyframes pop-success {
+  0% { transform: scale(1); }
+  50% { transform: scale(1.1); filter: brightness(1.2); }
+  100% { transform: scale(1); }
+}
+
+.node-success {
+  animation: pop-success 0.4s ease-out;
+  border-color: hsl(var(--success)) !important;
+  box-shadow: 0 0 20px hsl(var(--success) / 0.4) !important;
+}
+
+/* Dragging Effect */
+.react-flow__node.dragging .glass-card {
+  transform: scale(1.05) translateY(-5px);
+  box-shadow: 0 25px 50px -12px hsl(var(--primary) / 0.4);
+  border-color: hsl(var(--primary));
+  transition: all 0.2s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+}
+
+/* Animated Border Shimmer */
+.shimmer-border {
+  position: relative;
+  z-index: 1;
+}
+.shimmer-border::after {
+  content: '';
+  position: absolute;
+  inset: -1px;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    hsl(var(--primary) / 0.8) 50%,
+    transparent 100%
+  );
+  background-size: 200% 100%;
+  animation: border-shimmer 2.5s linear infinite;
+  border-radius: inherit;
+  z-index: -1;
+  pointer-events: none;
+}
+@keyframes border-shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+@keyframes running-glow {
+  0% { box-shadow: 0 0 10px hsl(var(--warning) / 0.4); }
+  50% { box-shadow: 0 0 25px hsl(var(--warning) / 0.8); border-color: hsl(var(--warning)); }
+  100% { box-shadow: 0 0 10px hsl(var(--warning) / 0.4); }
+}
+
+.node-running {
+  animation: running-glow 1.5s infinite;
+  border-color: hsl(var(--warning)) !important;
+}
+
+.react-flow__minimap {
+  @apply glass-panel rounded-xl overflow-hidden !bg-background/40;
+}
+
+.react-flow__minimap-mask {
+  fill: hsl(var(--background) / 0.7);
+}
+
+.react-flow__minimap-node {
+  fill: hsl(var(--primary));
+}
+
+.react-flow__controls {
+  @apply glass-panel rounded-xl overflow-hidden !bg-transparent p-1 shadow-2xl border-white/10;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.react-flow__controls-button {
+  background: hsl(var(--card) / 0.5);
+  border: none;
+  border-radius: 8px;
+  color: hsl(var(--foreground));
+  transition: all 0.2s ease;
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.react-flow__controls-button:hover {
+  background: hsl(var(--primary) / 0.2);
+  color: hsl(var(--primary));
+}
+
+.react-flow__panel {
+  @apply z-10;
+}
+
+.react-flow__background {
+  background-color: transparent !important;
+}
+
