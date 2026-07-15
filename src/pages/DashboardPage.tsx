@@ -475,7 +475,9 @@ export function DashboardPage() {
                             <p className="text-sm font-medium truncate">{wf.name}</p>
                             <p className="text-xs text-muted-foreground">{wf.nodes?.length || 0} nodes</p>
                           </div>
-                          <Badge variant="outline" className="text-xs">{wf.status}</Badge>
+                          <Badge variant="outline" className={`text-xs ${wf.status === 'needs_configuration' ? 'bg-amber-500/10 text-amber-600 border-amber-500/30' : ''}`}>
+                            {wf.status === 'needs_configuration' ? 'Needs Setup' : wf.status}
+                          </Badge>
                         </div>
                       </Link>
                     ))}

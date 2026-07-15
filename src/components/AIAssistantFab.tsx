@@ -129,7 +129,7 @@ export function AIAssistantFab() {
       )
     }]);
 
-    let currentSteps: string[] = [];
+    const currentSteps: string[] = [];
 
     for (let i = 0; i < steps.length; i++) {
       await new Promise(resolve => setTimeout(resolve, 800));

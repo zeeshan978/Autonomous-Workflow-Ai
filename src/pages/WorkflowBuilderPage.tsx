@@ -12,7 +12,7 @@ import {
   Save, Play, Trash2, Settings, X, MessageSquare, GitBranch, Clock,
   Database, Mail, Globe, Webhook, RefreshCw, Upload, Bell, Download, Sparkles,
   CheckCircle, XCircle, Loader2, Copy, Edit2, Plus, ChevronRight,
-  AlertCircle, Zap, List, Star, Tag, FileJson, ToggleLeft, ToggleRight, Archive
+  AlertCircle, Zap, List, Star, Tag, FileJson, ToggleLeft, ToggleRight, Archive, ArrowRight, AlertTriangle, SkipForward
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -28,7 +28,9 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/comp
 import { useToast } from '@/hooks/use-toast';
 import { useUnsavedChanges } from '@/hooks/useUnsavedChanges';
 import { getWorkflow, createWorkflow, updateWorkflow, deleteWorkflow, getWorkflows, getExecution, getLogs } from '@/services/database';
-import { startExecution } from '@/services/executionEngine';
+import { startExecution, cancelExecution } from '@/services/executionEngine';
+import { validateWorkflow, type ValidationResult, type ValidationIssue } from '@/services/workflowValidation';
+import { getDatabaseSchema } from '@/services/database';
 import { supabase } from '@/lib/supabase';
 import type { Workflow as WorkflowType, Execution } from '@/types';
 import { format } from 'date-fns';
@@ -54,7 +56,7 @@ function getRecent(): { id: string; name: string }[] {
 }
 
 // ─── Node Status Colors ───────────────────────────────────────────────────────
-type NodeStatus = 'idle' | 'running' | 'success' | 'error';
+type NodeStatus = 'idle' | 'running' | 'success' | 'error' | 'skipped' | 'needs_configuration';
 
 // ─── Node Categories ──────────────────────────────────────────────────────────
 const NODE_CATEGORIES = [
@@ -99,20 +101,23 @@ const CustomNode = memo(function CustomNode({ data, selected }: { data: Record<s
 
   const label = (data.label as string) || 'Node';
   const status = (data._status as NodeStatus) || 'idle';
+  const errorData = data._errorData as { message?: string, reason?: string, suggestion?: string } | undefined;
 
   const statusBorder =
-    status === 'running' ? 'border-yellow-400 shadow-yellow-400/30 shadow-md' :
+    status === 'running' ? 'border-blue-500 shadow-blue-500/30 shadow-md' :
     status === 'success' ? 'border-green-400 shadow-green-400/20 shadow-md' :
-    status === 'error'   ? 'border-red-400 shadow-red-400/20 shadow-md' :
+    status === 'error'   ? 'border-red-500 shadow-red-500/30 shadow-lg ring-1 ring-red-500/50' :
+    status === 'skipped' ? 'border-gray-400 border-dashed opacity-70' :
+    status === 'needs_configuration' ? 'border-amber-400 shadow-amber-400/20 shadow-md' :
     selected             ? 'border-primary' : 'border-border';
 
-  return (
+  const nodeContent = (
     <motion.div
       initial={{ scale: 0.8, opacity: 0 }}
       animate={{ scale: 1, opacity: 1 }}
       transition={{ type: 'spring', stiffness: 300, damping: 20 }}
       whileHover={{ y: -5, scale: 1.02, boxShadow: '0 0 20px hsl(var(--primary) / 0.3)', borderColor: 'hsl(var(--primary) / 0.5)' }}
-      className={`glass-card rounded-xl min-w-[200px] relative transition-all duration-300 ${statusBorder} ${status === 'running' ? 'node-running' : ''} ${status === 'success' ? 'node-success' : ''}`}
+      className={`glass-card rounded-xl min-w-[200px] relative transition-all duration-300 ${statusBorder} ${status === 'running' ? 'animate-pulse' : ''} ${status === 'success' ? 'node-success' : ''}`}
     >
       <Handle
         type="target"
@@ -122,7 +127,9 @@ const CustomNode = memo(function CustomNode({ data, selected }: { data: Record<s
       <div className={`${colorClass} text-white px-3 py-2.5 rounded-t-xl flex items-center gap-2 bg-opacity-80 backdrop-blur-md`}>
         {status === 'running' && <Loader2 className="h-3 w-3 animate-spin" />}
         {status === 'success' && <CheckCircle className="h-3 w-3" />}
-        {status === 'error'   && <XCircle className="h-3 w-3" />}
+        {status === 'error'   && <AlertTriangle className="h-3 w-3 text-red-100" />}
+        {status === 'skipped' && <SkipForward className="h-3 w-3" />}
+        {status === 'needs_configuration' && <AlertTriangle className="h-3 w-3 text-amber-200" />}
         {status === 'idle'    && <Icon className="h-4 w-4" />}
         <span className="font-medium text-sm truncate">{label}</span>
       </div>
@@ -138,6 +145,25 @@ const CustomNode = memo(function CustomNode({ data, selected }: { data: Record<s
       />
     </motion.div>
   );
+
+  if (status === 'error' && errorData) {
+    return (
+      <Tooltip delayDuration={0}>
+        <TooltipTrigger asChild>{nodeContent}</TooltipTrigger>
+        <TooltipContent side="right" className="max-w-[250px] border-red-500/20 bg-red-950/90 text-white shadow-xl z-50">
+          <p className="font-bold mb-1 text-red-400">Execution Failed</p>
+          <p className="text-sm">{errorData.message}</p>
+          {errorData.suggestion && (
+            <p className="text-xs mt-2 border-t border-red-500/30 pt-2 text-red-200">
+              💡 {errorData.suggestion}
+            </p>
+          )}
+        </TooltipContent>
+      </Tooltip>
+    );
+  }
+
+  return nodeContent;
 });
 
 function configSummary(data: Record<string, unknown>): string {
@@ -159,10 +185,11 @@ function configSummary(data: Record<string, unknown>): string {
 const nodeTypes: NodeTypes = { custom: CustomNode };
 
 // ─── Node Config Editor ───────────────────────────────────────────────────────
-const NodeConfigFields = memo(function NodeConfigFields({ nodeType, config, onChange }: {
+const NodeConfigFields = memo(function NodeConfigFields({ nodeType, config, onChange, dbSchema = [] }: {
   nodeType: string;
   config: Record<string, unknown>;
   onChange: (cfg: Record<string, unknown>) => void;
+  dbSchema?: any[];
 }) {
   const set = (key: string, value: unknown) => onChange({ ...config, [key]: value });
 
@@ -268,7 +295,16 @@ const NodeConfigFields = memo(function NodeConfigFields({ nodeType, config, onCh
           </div>
           <div className="space-y-2">
             <Label>Table <span className="text-red-500">*</span></Label>
-            <Input value={(config.table as string) || ''} onChange={e => set('table', e.target.value)} placeholder="e.g. workflows, tasks" />
+            {dbSchema && dbSchema.length > 0 ? (
+              <Select value={(config.table as string) || ''} onValueChange={v => set('table', v)}>
+                <SelectTrigger><SelectValue placeholder="Select a table" /></SelectTrigger>
+                <SelectContent>
+                  {dbSchema.map((t: any) => <SelectItem key={t.table_name} value={t.table_name}>{t.table_name}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            ) : (
+              <Input value={(config.table as string) || ''} onChange={e => set('table', e.target.value)} placeholder="e.g. workflows, tasks" />
+            )}
           </div>
           {(config.operation === 'select' || !config.operation) && (
             <>
@@ -436,13 +472,17 @@ export function WorkflowBuilderPage() {
   
   // Validation & Optimization
   const [healthScore, setHealthScore] = useState(100);
-  const [validationErrors, setValidationErrors] = useState<string[]>([]);
+  const [validationErrors, setValidationErrors] = useState<ValidationIssue[]>([]);
   const [isOptimizing, setIsOptimizing] = useState(false);
+  
+  const [validationReport, setValidationReport] = useState<ValidationResult | null>(null);
+  const [showValidationDialog, setShowValidationDialog] = useState(false);
+  const [dbSchema, setDbSchema] = useState<any[]>([]);
 
   // Advanced workflow meta
   const [isFavorite, setIsFavorite] = useState(false);
   const [workflowTags, setWorkflowTags] = useState<string[]>([]);
-  const [workflowStatus, setWorkflowStatus] = useState<'draft' | 'active' | 'archived'>('draft');
+  const [workflowStatus, setWorkflowStatus] = useState<'draft' | 'active' | 'archived' | 'needs_configuration'>('draft');
   const [recentWorkflows, setRecentWorkflows] = useState(getRecent());
   const [tagInput, setTagInput] = useState('');
   const importInputRef = useRef<HTMLInputElement>(null);
@@ -452,6 +492,7 @@ export function WorkflowBuilderPage() {
   const [executionId, setExecutionId] = useState<string | null>(null);
   const [executionStatus, setExecutionStatus] = useState<string>('');
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
+  const [currentStepName, setCurrentStepName] = useState('');
   const elapsedRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const autosaveRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const savedNodesRef = useRef<string>('');
@@ -460,6 +501,9 @@ export function WorkflowBuilderPage() {
 
   // ── Load workflow ──────────────────────────────────────────────────────────
   useEffect(() => {
+    // Load schema
+    getDatabaseSchema().then(setDbSchema).catch(console.error);
+    
     if (id && id !== 'new') {
       loadWorkflow(id);
     } else if (location.state?.template) {
@@ -501,7 +545,7 @@ export function WorkflowBuilderPage() {
         const vars = (workflow.variables as any) || {};
         setIsFavorite(vars.is_favorite || false);
         setWorkflowTags(vars.tags || []);
-        setWorkflowStatus((workflow.status as 'draft' | 'active' | 'archived') || 'draft');
+        setWorkflowStatus((workflow.status as 'draft' | 'active' | 'archived' | 'needs_configuration') || 'draft');
         setIsDirty(false);
         savedNodesRef.current = JSON.stringify(loadedNodes);
         
@@ -664,40 +708,13 @@ export function WorkflowBuilderPage() {
 
   // ── Validation Engine ───────────────────────────────────────────────────────
   useEffect(() => {
-    let score = 100;
-    const errors: string[] = [];
 
-    // Check isolated nodes
-    if (nodes.length > 1) {
-      const connectedNodes = new Set<string>();
-      edges.forEach(e => {
-        connectedNodes.add(e.source);
-        connectedNodes.add(e.target);
-      });
-      
-      nodes.forEach(n => {
-        if (!connectedNodes.has(n.id)) {
-          errors.push(`Node "${n.data.label}" is isolated.`);
-          score -= 10;
-        }
-      });
-    }
-
-    // Check configs
-    nodes.forEach(n => {
-      const cfg = (n.data.config as Record<string, unknown>) || {};
-      const type = (n.data.node_type as string) || (n.data.type as string) || '';
-      
-      if (type === 'api_call' && !cfg.url) { errors.push(`API node "${n.data.label}" is missing URL.`); score -= 15; }
-      if (type === 'ai_prompt' && !cfg.prompt) { errors.push(`AI node "${n.data.label}" is missing prompt.`); score -= 15; }
-      if (type === 'email' && !cfg.to) { errors.push(`Email node "${n.data.label}" is missing recipient.`); score -= 15; }
-      if (type === 'database' && !cfg.operation && !cfg.query) { errors.push(`DB node "${n.data.label}" is unconfigured.`); score -= 15; }
-      if (type === 'condition' && !cfg.condition) { errors.push(`Condition node "${n.data.label}" is missing condition.`); score -= 15; }
-      if (type === 'webhook' && !cfg.url) { errors.push(`Webhook node "${n.data.label}" is missing URL.`); score -= 15; }
-    });
-
-    setValidationErrors(errors);
-    setHealthScore(Math.max(0, score));
+    // Check configs using central validation engine
+    const result = validateWorkflow(nodes as any, edges as any);
+    
+    setValidationErrors(result.errors);
+    const calculatedScore = 100 - (result.errors.length * 15) - (result.warnings.length * 5);
+    setHealthScore(Math.max(0, calculatedScore));
   }, [nodes, edges]);
 
   // ── Optimize Workflow ───────────────────────────────────────────────────────
@@ -784,26 +801,54 @@ export function WorkflowBuilderPage() {
           lastLogCount = logs.length;
           
           let updatedNodes = false;
-          const nodeUpdates: Record<string, NodeStatus> = {};
+          const nodeUpdatesByLabel: Record<string, { status: NodeStatus, errorData?: any }> = {};
           
           for (const log of newLogs) {
             const runMatch = log.message.match(/Running node: (.+?) \(/);
             const doneMatch = log.message.match(/✓ (.+?) completed/);
             const failMatch = log.message.match(/✗ (.+?) failed/);
             
-            if (runMatch) { nodeUpdates[runMatch[1]] = 'running'; updatedNodes = true; }
-            else if (doneMatch) { nodeUpdates[doneMatch[1]] = 'success'; updatedNodes = true; }
-            else if (failMatch) { nodeUpdates[failMatch[1]] = 'error'; updatedNodes = true; }
+            if (runMatch) { 
+              nodeUpdatesByLabel[runMatch[1]] = { status: 'running' }; 
+              updatedNodes = true; 
+              setCurrentStepName(runMatch[1]);
+            }
+            else if (doneMatch) { nodeUpdatesByLabel[doneMatch[1]] = { status: 'success' }; updatedNodes = true; }
+            else if (failMatch) { nodeUpdatesByLabel[failMatch[1]] = { status: 'error', errorData: log.metadata?.issue || log.metadata }; updatedNodes = true; }
           }
           
           if (updatedNodes) {
-            setNodes(nds => nds.map(n => {
-              const label = n.data.label as string;
-              if (nodeUpdates[label]) {
-                return { ...n, data: { ...n.data, _status: nodeUpdates[label] } };
-              }
-              return n;
-            }));
+            setNodes(nds => {
+              const nodeUpdatesById: Record<string, { status: NodeStatus, errorData?: any }> = {};
+              
+              const nextNodes = nds.map(n => {
+                const label = n.data.label as string;
+                if (nodeUpdatesByLabel[label]) {
+                  const update = nodeUpdatesByLabel[label];
+                  nodeUpdatesById[n.id] = update;
+                  
+                  if (update.status === 'success') {
+                    setTimeout(() => {
+                      setNodes(currentNodes => currentNodes.map(cn => cn.id === n.id && cn.data._status === 'success' ? { ...cn, data: { ...cn.data, _status: 'idle' } } : cn));
+                    }, 2000);
+                  }
+                  
+                  return { ...n, data: { ...n.data, _status: update.status, _errorData: update.errorData || undefined } };
+                }
+                return n;
+              });
+
+              setEdges(eds => eds.map(e => {
+                if (nodeUpdatesById[e.target]) {
+                  const targetStatus = nodeUpdatesById[e.target].status;
+                  if (targetStatus === 'running') return { ...e, animated: true, style: { stroke: '#3b82f6', strokeWidth: 2 } };
+                  if (targetStatus === 'success' || targetStatus === 'error') return { ...e, animated: false, style: {} };
+                }
+                return e;
+              }));
+
+              return nextNodes;
+            });
           }
         }
 
@@ -812,6 +857,15 @@ export function WorkflowBuilderPage() {
           if (elapsedRef.current) clearInterval(elapsedRef.current);
           setNodeStatuses({});
           
+          // Reset all transient running edges and nodes (except failed nodes which remain red)
+          setCurrentStepName('');
+          setEdges(eds => eds.map(e => ({ ...e, animated: false, style: {} })));
+          setNodes(nds => nds.map(n => {
+            if (n.data._status === 'running') {
+              return { ...n, data: { ...n.data, _status: 'idle' } };
+            }
+            return n;
+          }));          
           if (exec.status === 'completed') {
             toast({ title: '✓ Workflow completed successfully!' });
             // Success Confetti!
@@ -822,7 +876,16 @@ export function WorkflowBuilderPage() {
               colors: ['#8b5cf6', '#3b82f6', '#10b981', '#f59e0b']
             });
           } else if (exec.status === 'failed') {
-            toast({ title: '✗ Workflow execution failed', description: exec.error_message || undefined, variant: 'destructive' });
+            let errorMsg = exec.error_message || undefined;
+            try {
+              if (errorMsg) {
+                const parsed = JSON.parse(errorMsg);
+                if (parsed?.message) errorMsg = parsed.message;
+              }
+            } catch (e) {
+              // Ignore
+            }
+            toast({ title: '❌ Workflow execution failed', description: errorMsg, variant: 'destructive' });
           }
         }
       } catch (err) {
@@ -879,6 +942,15 @@ export function WorkflowBuilderPage() {
     if (!user?.id) return;
     setSaving(true);
     try {
+      let currentStatus = workflowStatus;
+      if (currentStatus === 'needs_configuration') {
+        const valReport = validateWorkflow(nodes as any, edges as any);
+        if (!valReport.needsConfiguration) {
+          currentStatus = 'draft';
+          setWorkflowStatus('draft');
+        }
+      }
+
       const workflowData = {
         user_id: user.id,
         agent_id: null as null,
@@ -888,7 +960,7 @@ export function WorkflowBuilderPage() {
         nodes: nodes.map(n => ({ id: n.id, type: 'custom', position: n.position, data: n.data })),
         edges: edges.map(e => ({ id: e.id, source: e.source, target: e.target, sourceHandle: e.sourceHandle ?? undefined, targetHandle: e.targetHandle ?? undefined })),
         variables: { tags: workflowTags, is_favorite: isFavorite },
-        status: workflowStatus as 'draft' | 'active' | 'archived',
+        status: currentStatus as 'draft' | 'active' | 'archived' | 'needs_configuration',
         is_template: false
       };
 
@@ -931,13 +1003,20 @@ export function WorkflowBuilderPage() {
 
   const handleSave = () => performSave(false);
 
-  // ── Execute ───────────────────────────────────────────────────────────────
-  const handleExecute = async () => {
-    if (!user?.id) return;
-    if (!workflowId) {
-      toast({ title: 'Save the workflow first before running it', variant: 'destructive' });
-      return;
+  // ── Validate ────────────────────────────────────────────────────────────────
+  const handleValidate = (skipDialogIfValid = false) => {
+    const report = validateWorkflow(nodes as any, edges as any);
+    setValidationReport(report);
+    if (!report.valid || !skipDialogIfValid || report.warnings.length > 0) {
+      setShowValidationDialog(true);
     }
+    return report;
+  };
+
+  // ── Execute ───────────────────────────────────────────────────────────────
+  const proceedWithExecution = async () => {
+    if (!user?.id || !workflowId) return;
+    
     if (isDirty) {
       toast({ title: 'Saving before execution…' });
       await performSave(true);
@@ -960,6 +1039,37 @@ export function WorkflowBuilderPage() {
     }
   };
 
+  const handleExecute = () => {
+    if (!user?.id) return;
+    if (!workflowId) {
+      toast({ title: 'Save the workflow first before running it', variant: 'destructive' });
+      return;
+    }
+    
+    const report = handleValidate(true);
+    if (report.needsConfiguration) {
+      toast({ 
+        title: 'Configuration Needed', 
+        description: 'This workflow has unconfigured settings that need your input before it can run.', 
+        variant: 'destructive' 
+      });
+      return;
+    }
+    if (!report.valid) {
+      toast({ title: 'Validation failed', description: 'Please fix the errors before executing.', variant: 'destructive' });
+      return;
+    }
+    
+    // If valid but has warnings, handleValidate already opened the dialog, so we stop here.
+    // The user can click "Execute Anyway" in the dialog to call proceedWithExecution.
+    if (report.warnings.length > 0) {
+      return;
+    }
+
+    // No errors, no warnings -> run immediately
+    proceedWithExecution();
+  };
+
   // ── Delete selected nodes ─────────────────────────────────────────────────
   const deleteSelectedNodes = () => {
     const selectedIds = new Set(nodes.filter(n => n.selected).map(n => n.id));
@@ -971,6 +1081,16 @@ export function WorkflowBuilderPage() {
   };
 
   // ── Duplicate workflow ────────────────────────────────────────────────────
+  const handleCancelExecution = async () => {
+    if (!executionId) return;
+    try {
+      await cancelExecution(executionId);
+      toast({ title: 'Execution cancelling...' });
+    } catch (e: any) {
+      toast({ title: 'Failed to cancel', description: e.message, variant: 'destructive' });
+    }
+  };
+
   const handleDuplicate = async () => {
     if (!user?.id) return;
     try {
@@ -1135,7 +1255,7 @@ export function WorkflowBuilderPage() {
                   <p className="font-semibold mb-1">Health Score</p>
                   {validationErrors.length === 0 ? 'All nodes configured properly.' : (
                     <ul className="list-disc pl-4 text-xs text-red-300">
-                      {validationErrors.map((err, i) => <li key={i}>{err}</li>)}
+                      {validationErrors.map((err, i) => <li key={i}>{err.nodeName}: {err.message}</li>)}
                     </ul>
                   )}
                 </div>
@@ -1170,6 +1290,11 @@ export function WorkflowBuilderPage() {
               <TooltipContent>Delete workflow</TooltipContent>
             </Tooltip>
 
+            <Button size="sm" variant="secondary" onClick={() => handleValidate()}>
+              <CheckCircle className="h-4 w-4 mr-1" />
+              Validate
+            </Button>
+
             <Button size="sm" onClick={handleSave} disabled={saving || !isDirty}>
               {saving ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : <Save className="h-4 w-4 mr-1" />}
               {saving ? 'Saving…' : 'Save'}
@@ -1190,12 +1315,21 @@ export function WorkflowBuilderPage() {
               initial={{ height: 0, opacity: 0 }}
               animate={{ height: 'auto', opacity: 1 }}
               exit={{ height: 0, opacity: 0 }}
-              className="bg-yellow-500/10 border-b border-yellow-500/30 px-4 py-2 flex items-center gap-3 text-sm"
+              className="bg-blue-500/10 border-b border-blue-500/30 px-4 py-2 flex items-center justify-between text-sm"
             >
-              <Loader2 className="h-4 w-4 animate-spin text-yellow-500" />
-              <span className="font-medium text-yellow-600 dark:text-yellow-400">Execution running</span>
-              <span className="text-muted-foreground">Elapsed: {formatElapsed(elapsedSeconds)}</span>
-              <span className="text-muted-foreground">Watch the node borders for live status.</span>
+              <div className="flex items-center gap-3">
+                <Loader2 className="h-4 w-4 animate-spin text-blue-500" />
+                <span className="font-medium text-blue-600 dark:text-blue-400">Execution running</span>
+                {currentStepName && (
+                  <span className="text-muted-foreground border-l border-white/20 pl-3">
+                    Current: <strong className="text-foreground">{currentStepName}</strong>
+                  </span>
+                )}
+                <span className="text-muted-foreground border-l border-white/20 pl-3">Elapsed: {formatElapsed(elapsedSeconds)}</span>
+              </div>
+              <Button size="sm" variant="destructive" onClick={handleCancelExecution} className="h-7 text-xs">
+                Cancel
+              </Button>
             </motion.div>
           )}
         </AnimatePresence>
@@ -1320,7 +1454,24 @@ export function WorkflowBuilderPage() {
                       nodeType={selectedNodeType}
                       config={(selectedNode.data.config as Record<string, unknown>) || {}}
                       onChange={updateNodeConfig}
+                      dbSchema={dbSchema}
                     />
+                    <Separator />
+                    <div className="flex items-center space-x-2">
+                      <input
+                        type="checkbox"
+                        id="continueOnFail"
+                        checked={!!((selectedNode.data.config as any)?.continueOnFail)}
+                        onChange={(e) => updateNodeConfig({ ...((selectedNode.data.config as any) || {}), continueOnFail: e.target.checked })}
+                        className="h-4 w-4 rounded border-gray-300 text-primary focus:ring-primary"
+                      />
+                      <Label htmlFor="continueOnFail" className="text-sm cursor-pointer">
+                        Continue on fail
+                      </Label>
+                    </div>
+                    <p className="text-xs text-muted-foreground ml-6">
+                      If enabled, execution will proceed even if this node fails.
+                    </p>
                     <Separator />
                     <Button variant="destructive" size="sm" className="w-full"
                       onClick={() => { deleteSelectedNodes(); }}>
@@ -1464,7 +1615,9 @@ export function WorkflowBuilderPage() {
                         </p>
                       </div>
                       <div className="flex items-center gap-1.5 shrink-0">
-                        <Badge variant="outline" className="text-xs">{wf.status}</Badge>
+                        <Badge variant="outline" className={`text-xs ${wf.status === 'needs_configuration' ? 'bg-amber-500/10 text-amber-600 border-amber-500/30' : ''}`}>
+                          {wf.status === 'needs_configuration' ? 'Needs Setup' : wf.status}
+                        </Badge>
                         {wf.nodes?.length > 0 && (
                           <span className="text-xs text-muted-foreground">{wf.nodes.length} nodes</span>
                         )}
@@ -1475,6 +1628,95 @@ export function WorkflowBuilderPage() {
                 </div>
               )}
             </ScrollArea>
+          </DialogContent>
+        </Dialog>
+        {/* Validation Dialog */}
+        <Dialog open={showValidationDialog} onOpenChange={setShowValidationDialog}>
+          <DialogContent className="max-w-2xl">
+            <DialogHeader>
+              <DialogTitle className="flex items-center gap-2">
+                {validationReport?.valid ? (
+                  <><CheckCircle className="h-5 w-5 text-green-500" /> Workflow is Valid</>
+                ) : (
+                  <><AlertCircle className="h-5 w-5 text-red-500" /> EXECUTION BLOCKED</>
+                )}
+              </DialogTitle>
+              <DialogDescription>
+                Review the validation report before executing this workflow.
+              </DialogDescription>
+            </DialogHeader>
+            <ScrollArea className="max-h-[60vh]">
+              <div className="space-y-4 py-2">
+                {validationReport?.errors && validationReport.errors.length > 0 && (
+                  <div>
+                    <h3 className="text-sm font-semibold text-red-500 mb-2 flex items-center gap-2">
+                      <XCircle className="h-4 w-4" /> Errors ({validationReport.errors.length})
+                    </h3>
+                    <div className="space-y-2">
+                      {validationReport.errors.map((err, i) => (
+                        <div key={i} 
+                             className="p-3 bg-red-500/10 border border-red-500/20 rounded-md text-sm cursor-pointer hover:bg-red-500/20 transition-colors"
+                             onClick={() => {
+                               setShowValidationDialog(false);
+                               const n = nodes.find(node => node.id === err.nodeId);
+                               if (n) { setSelectedNode(n); setShowNodeEditor(true); }
+                             }}>
+                          <div className="font-medium text-red-600 dark:text-red-400">{err.nodeName}</div>
+                          <div>{err.message}</div>
+                          {err.suggestion && <div className="mt-1 text-red-500 font-medium">💡 Suggestion: {err.suggestion}</div>}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                
+                {validationReport?.warnings && validationReport.warnings.length > 0 && (
+                  <div>
+                    <h3 className="text-sm font-semibold text-yellow-500 mb-2 flex items-center gap-2">
+                      <AlertCircle className="h-4 w-4" /> Warnings ({validationReport.warnings.length})
+                    </h3>
+                    <div className="space-y-2">
+                      {validationReport.warnings.map((warn, i) => (
+                        <div key={i} 
+                             className="p-3 bg-yellow-500/10 border border-yellow-500/20 rounded-md text-sm cursor-pointer hover:bg-yellow-500/20 transition-colors"
+                             onClick={() => {
+                               setShowValidationDialog(false);
+                               const n = nodes.find(node => node.id === warn.nodeId);
+                               if (n) { setSelectedNode(n); setShowNodeEditor(true); }
+                             }}>
+                          <div className="font-medium text-yellow-600 dark:text-yellow-400">{warn.nodeName}</div>
+                          <div>{warn.message}</div>
+                          {warn.suggestion && <div className="mt-1 text-yellow-600 font-medium">💡 Suggestion: {warn.suggestion}</div>}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {validationReport?.valid && validationReport.warnings.length === 0 && (
+                  <div className="p-4 bg-green-500/10 border border-green-500/20 rounded-md text-green-600 dark:text-green-400 flex items-center gap-3">
+                    <CheckCircle className="h-5 w-5" />
+                    <div>
+                      <div className="font-medium">READY TO EXECUTE</div>
+                      <div className="text-sm opacity-90">All checks passed! The workflow is ready for execution.</div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </ScrollArea>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setShowValidationDialog(false)}>
+                Close
+              </Button>
+              {validationReport?.valid && (
+                <Button onClick={() => {
+                  setShowValidationDialog(false);
+                  proceedWithExecution();
+                }}>
+                  {validationReport.warnings.length > 0 ? "Run Anyway" : "Run"}
+                </Button>
+              )}
+            </DialogFooter>
           </DialogContent>
         </Dialog>
       </div>

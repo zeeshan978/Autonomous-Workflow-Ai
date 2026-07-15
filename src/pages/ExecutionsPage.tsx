@@ -433,9 +433,39 @@ export function ExecutionsPage() {
                   )}
 
                   {selectedExecution.error_message && (
-                    <div className="p-3 bg-red-500/10 text-red-500 rounded-lg border border-red-500/20">
-                      <p className="text-xs font-medium mb-1">Error Message</p>
-                      <p className="text-sm font-mono break-words">{selectedExecution.error_message}</p>
+                    <div className="p-4 bg-red-500/10 text-red-500 rounded-lg border border-red-500/20">
+                      <p className="text-sm font-semibold mb-2 flex items-center gap-2"><XCircle className="h-4 w-4" /> Error Details</p>
+                      {(() => {
+                        let parsed = null;
+                        try {
+                          parsed = JSON.parse(selectedExecution.error_message);
+                          if (!parsed?.message) parsed = null;
+                        } catch (e) {
+                          // Ignore parsing error, fallback to plain text
+                        }
+
+                        if (parsed) {
+                          return (
+                            <div className="space-y-3">
+                              <p className="text-sm font-bold">{parsed.message}</p>
+                              {parsed.reason && <p className="text-sm opacity-90">{parsed.reason}</p>}
+                              {parsed.suggestion && (
+                                <div className="mt-2 p-3 bg-red-500/20 rounded-md border border-red-500/30">
+                                  <p className="text-sm font-medium">💡 Suggestion: {parsed.suggestion}</p>
+                                </div>
+                              )}
+                              {parsed.rawError && (
+                                <details className="mt-2 text-xs opacity-70">
+                                  <summary className="cursor-pointer font-medium hover:opacity-100">Raw Error</summary>
+                                  <pre className="mt-1 p-2 bg-black/10 rounded font-mono break-words whitespace-pre-wrap">{parsed.rawError}</pre>
+                                </details>
+                              )}
+                            </div>
+                          );
+                        } else {
+                          return <p className="text-sm font-mono break-words">{selectedExecution.error_message}</p>;
+                        }
+                      })()}
                     </div>
                   )}
 
@@ -444,7 +474,7 @@ export function ExecutionsPage() {
                     <div className="border rounded-lg p-3 bg-card mt-4">
                       <p className="text-sm font-medium mb-3">Execution Timeline</p>
                       <div className="relative border-l-2 border-muted ml-3 pl-4 space-y-4">
-                        {logs.map((log) => {
+                        {logs.map((log): React.ReactNode => {
                           const runMatch = log.message.match(/Running node: (.+?) \(/);
                           const doneMatch = log.message.match(/✓ (.+?) completed/);
                           const skipMatch = log.message.match(/Skipping node: (.+?) \(/);
@@ -452,7 +482,7 @@ export function ExecutionsPage() {
                           
                           let nodeName = '';
                           let statusColor = 'bg-muted-foreground';
-                          let icon = <Clock className="h-3 w-3 text-white" />;
+                          let icon: any = <Clock className="h-3 w-3 text-white" />;
                           
                           if (runMatch) { nodeName = runMatch[1]; statusColor = 'bg-blue-500'; icon = <Activity className="h-3 w-3 text-white" />; }
                           else if (doneMatch) { nodeName = doneMatch[1]; statusColor = 'bg-green-500'; icon = <CheckCircle className="h-3 w-3 text-white" />; }
@@ -470,6 +500,23 @@ export function ExecutionsPage() {
                                 <div>
                                   <p className="text-sm font-medium">{nodeName}</p>
                                   <p className="text-xs text-muted-foreground">{log.message}</p>
+                                  {log.metadata && (log.metadata as any).issue && (
+                                    <div className="mt-2 p-3 bg-red-500/10 text-red-500 rounded-md border border-red-500/20">
+                                      <p className="text-sm font-bold">{((log.metadata as any).issue as any).message}</p>
+                                      {((log.metadata as any).issue as any).reason && <p className="text-sm opacity-90">{((log.metadata as any).issue as any).reason}</p>}
+                                      {((log.metadata as any).issue as any).suggestion && (
+                                        <div className="mt-2 p-2 bg-red-500/20 rounded border border-red-500/30">
+                                          <p className="text-sm font-medium">💡 Suggestion: {((log.metadata as any).issue as any).suggestion}</p>
+                                        </div>
+                                      )}
+                                      {((log.metadata as any).issue as any).rawError && (
+                                        <details className="mt-2 text-xs opacity-70">
+                                          <summary className="cursor-pointer font-medium hover:opacity-100">Raw Error</summary>
+                                          <pre className="mt-1 p-2 bg-black/10 rounded font-mono break-words whitespace-pre-wrap">{((log.metadata as any).issue as any).rawError}</pre>
+                                        </details>
+                                      )}
+                                    </div>
+                                  )}
                                 </div>
                                 <span className="text-xs text-muted-foreground whitespace-nowrap ml-2">
                                   {new Date(log.created_at).toLocaleTimeString()}
@@ -481,6 +528,60 @@ export function ExecutionsPage() {
                       </div>
                     </div>
                   )}
+
+                  {(() => {
+                    const report = selectedExecution.result?.report as any;
+                    if (!report) return null;
+                    return (
+                      <div className="border rounded-lg p-3 bg-card mt-4 mb-4 shadow-sm">
+                        <p className="text-sm font-semibold mb-3 flex items-center gap-2">
+                          <Activity className="h-4 w-4" /> Execution Report
+                        </p>
+                        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+                          <div className="p-3 bg-muted/30 rounded-md border text-center">
+                            <p className="text-xs text-muted-foreground mb-1">Total Nodes</p>
+                            <p className="text-lg font-semibold">{report.totalNodes}</p>
+                          </div>
+                          <div className="p-3 bg-muted/30 rounded-md border text-center">
+                            <p className="text-xs text-muted-foreground mb-1">Executed</p>
+                            <p className="text-lg font-semibold text-green-500">{report.executedNodes}</p>
+                          </div>
+                          <div className="p-3 bg-muted/30 rounded-md border text-center">
+                            <p className="text-xs text-muted-foreground mb-1">Failed</p>
+                            <p className="text-lg font-semibold text-red-500">{report.failedNodes}</p>
+                          </div>
+                          <div className="p-3 bg-muted/30 rounded-md border text-center">
+                            <p className="text-xs text-muted-foreground mb-1">Duration</p>
+                            <p className="text-lg font-semibold">
+                              {report.startTime && report.endTime
+                                ? `${Math.round((new Date(report.endTime).getTime() - new Date(report.startTime).getTime()) / 100) / 10}s`
+                                : '-'}
+                            </p>
+                          </div>
+                        </div>
+                        
+                        <div className="space-y-3">
+                          <p className="text-xs font-medium text-muted-foreground">Node Details</p>
+                          {report.nodes.map((n: any, idx: number) => (
+                            <div key={n.id + idx} className={`p-3 rounded-md border ${n.status === 'failed' ? (n.ignored ? 'border-yellow-500/50 bg-yellow-500/10' : 'border-red-500/50 bg-red-500/10') : 'border-green-500/50 bg-green-500/10'}`}>
+                              <div className="flex justify-between items-center mb-1">
+                                <span className="font-medium text-sm">{n.name} <span className="text-xs text-muted-foreground ml-1">({n.type})</span></span>
+                                <Badge variant={n.status === 'failed' ? (n.ignored ? 'outline' : 'destructive') : 'default'} className={n.ignored ? 'text-yellow-600 border-yellow-500 bg-yellow-500/20' : ''}>
+                                  {n.status === 'failed' && n.ignored ? 'Ignored Failure' : n.status}
+                                </Badge>
+                              </div>
+                              <div className="flex justify-between items-center text-xs text-muted-foreground">
+                                <span>Duration: {n.startTime && n.endTime ? `${Math.round((new Date(n.endTime).getTime() - new Date(n.startTime).getTime()))}ms` : '-'}</span>
+                              </div>
+                              {n.error && (
+                                <p className="mt-2 text-xs font-mono text-red-500 break-words bg-background/80 p-2 rounded border border-red-500/20">{n.error}</p>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    );
+                  })()}
 
                   {selectedExecution.result && (
                     <div className="border rounded-lg p-3 bg-muted/20">

@@ -4,7 +4,7 @@ import { useAuth } from '@/hooks/useAuth';
 import { useNavigate } from 'react-router-dom';
 import {
   Sparkles, Play, Save, Trash2, Mic, Paperclip, Loader2, Bot,
-  CheckCircle, XCircle, Clock, ArrowRight, Zap
+  CheckCircle, XCircle, Clock, ArrowRight, Zap, AlertTriangle
 } from 'lucide-react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -16,6 +16,7 @@ import { useToast } from '@/hooks/use-toast';
 import { generateWorkflowFromPrompt } from '@/services/api';
 import { createWorkflow, createExecution, updateExecution, createNotification, createLog } from '@/services/database';
 import { startExecution } from '@/services/executionEngine';
+import { validateWorkflow, type ValidationResult } from '@/services/workflowValidation';
 import { supabase } from '@/lib/supabase';
 import type { Log } from '@/types';
 
@@ -44,6 +45,7 @@ export function CommandCenterPage() {
     edges: Array<{ id: string; source: string; target: string; sourceHandle?: string; targetHandle?: string }>;
     variables: Record<string, unknown>;
   } | null>(null);
+  const [validationResult, setValidationResult] = useState<ValidationResult | null>(null);
   const [logs, setLogs] = useState<Array<{ level: string; message: string; timestamp: Date }>>([]);
 
   const addLog = (level: string, message: string) => {
@@ -76,6 +78,22 @@ export function CommandCenterPage() {
       addLog('info', `Workflow "${workflow.name}" generated successfully`);
       setProgress(30);
 
+      // Run validation
+      const mappedNodes = workflow.nodes.map((n, index) => ({
+        id: n.id,
+        type: n.type,
+        position: n.position || { x: 100, y: 100 + (index * 150) },
+        data: { label: n.name, ...n.config }
+      }));
+      const mappedEdges = workflow.edges || workflow.nodes.slice(1).map((n, index) => ({
+        id: `edge-${index}`,
+        source: workflow.nodes[index].id,
+        target: n.id
+      }));
+
+      const valResult = validateWorkflow(mappedNodes as any, mappedEdges as any);
+      setValidationResult(valResult);
+
       // Save workflow to database
       setStatus('Saving workflow...');
       addLog('info', 'Saving workflow to database...');
@@ -87,24 +105,23 @@ export function CommandCenterPage() {
         name: workflow.name,
         description: workflow.description,
         prompt: prompt,
-        nodes: workflow.nodes.map((n, index) => ({
-          id: n.id,
-          type: n.type,
-          position: n.position || { x: 100, y: 100 + (index * 150) },
-          data: { label: n.name, ...n.config }
-        })),
-        edges: workflow.edges || workflow.nodes.slice(1).map((n, index) => ({
-          id: `edge-${index}`,
-          source: workflow.nodes[index].id,
-          target: n.id
-        })),
+        nodes: mappedNodes,
+        edges: mappedEdges,
         variables: workflow.variables,
-        status: 'active',
+        status: valResult.needsConfiguration ? 'needs_configuration' : (valResult.valid ? 'active' : 'draft'),
         is_template: false
       });
 
       addLog('info', `Workflow saved with ID: ${savedWorkflow.id}`);
       setProgress(50);
+
+      if (valResult.needsConfiguration || !valResult.valid) {
+        setStatus('Configuration Needed');
+        addLog('error', `Workflow requires configuration before it can run.`);
+        toast({ title: 'Configuration needed', description: 'The generated workflow needs manual configuration before it can run.', variant: 'destructive' });
+        setLoading(false);
+        return;
+      }
 
       // Start execution
       setStatus('Starting execution...');
@@ -120,6 +137,7 @@ export function CommandCenterPage() {
       // Poll execution progress
       let currentProgress = 0;
       let executionStatus = 'queued';
+      let lastErrorMessage = '';
       
       while (executionStatus === 'queued' || executionStatus === 'running') {
         await new Promise(resolve => setTimeout(resolve, 1000));
@@ -132,6 +150,7 @@ export function CommandCenterPage() {
         if (latestExec) {
           executionStatus = latestExec.status;
           currentProgress = latestExec.progress;
+          if (latestExec.error_message) lastErrorMessage = latestExec.error_message;
           setProgress(currentProgress);
           setStatus(`Executing... ${currentProgress}%`);
           addLog('info', `Execution status: ${executionStatus}`);
@@ -159,10 +178,26 @@ export function CommandCenterPage() {
         });
       } else {
         setStatus('Failed!');
-        addLog('error', 'Workflow execution failed.');
+        
+        let errorMsg = lastErrorMessage || 'Workflow execution failed.';
+        let logMsg = 'Workflow execution failed.';
+        let parsedIssue = null;
+        try {
+          if (lastErrorMessage) {
+            parsedIssue = JSON.parse(lastErrorMessage);
+            if (parsedIssue?.message) {
+              errorMsg = parsedIssue.message;
+              logMsg = `Failed: ${parsedIssue.message}`;
+            }
+          }
+        } catch (e) {
+          // Ignore
+        }
+
+        addLog('error', logMsg);
         toast({
           title: 'Execution Failed',
-          description: 'The workflow execution encountered an error.',
+          description: errorMsg,
           variant: 'destructive'
         });
       }
@@ -223,6 +258,7 @@ export function CommandCenterPage() {
   const handleClear = () => {
     setPrompt('');
     setGeneratedWorkflow(null);
+    setValidationResult(null);
     setLogs([]);
     setProgress(0);
     setStatus('');
@@ -376,19 +412,48 @@ export function CommandCenterPage() {
                   Generated Workflow
                 </CardTitle>
                 <CardDescription>{generatedWorkflow.description}</CardDescription>
+                {validationResult && validationResult.needsConfiguration && (
+                  <div className="mt-2 p-3 bg-amber-500/10 text-amber-600 rounded-md border border-amber-500/20 text-sm">
+                    <p className="font-semibold mb-1 flex items-center gap-2"><AlertTriangle className="h-4 w-4" /> This workflow needs settings completed before it can run:</p>
+                    <ul className="list-disc pl-5 space-y-1">
+                      {validationResult.warnings.filter(w => w.message.includes('needs configuration') || w.suggestion?.includes('Review')).map((w, i) => (
+                        <li key={i}><strong>{w.nodeName}:</strong> {w.message}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+                {validationResult && !validationResult.valid && !validationResult.needsConfiguration && (
+                  <Badge variant="destructive" className="mt-2 text-xs">
+                    {validationResult.errors.length} issues found — needs configuration before running
+                  </Badge>
+                )}
+                {validationResult && validationResult.valid && !validationResult.needsConfiguration && validationResult.warnings.length > 0 && (
+                  <Badge variant="outline" className="mt-2 text-xs text-yellow-500 border-yellow-500">
+                    {validationResult.warnings.length} warnings
+                  </Badge>
+                )}
               </CardHeader>
               <CardContent>
                 <div className="space-y-2">
-                  {generatedWorkflow.nodes.map((n, index) => (
-                    <div key={n.id} className="flex items-center gap-3">
-                      <div className="flex items-center justify-center w-6 h-6 rounded-full bg-primary text-primary-foreground text-sm font-medium">
-                        {index + 1}
+                  {generatedWorkflow.nodes.map((n, index) => {
+                    const needsConfig = (n.config as any)?.needs_configuration === true || (n as any).needs_configuration === true;
+                    return (
+                      <div key={n.id} className="flex flex-col gap-1">
+                        <div className="flex items-center gap-3">
+                          <div className="flex items-center justify-center w-6 h-6 rounded-full bg-primary text-primary-foreground text-sm font-medium">
+                            {index + 1}
+                          </div>
+                          <Badge variant="outline">{n.type}</Badge>
+                          <span className="flex-1">{n.name}</span>
+                          {needsConfig ? (
+                            <Badge variant="outline" className="bg-amber-500/10 text-amber-600 border-amber-500/30">⚠ Needs Setup</Badge>
+                          ) : (
+                            <CheckCircle className="h-4 w-4 text-green-500" />
+                          )}
+                        </div>
                       </div>
-                      <Badge variant="outline">{n.type}</Badge>
-                      <span className="flex-1">{n.name}</span>
-                      <CheckCircle className="h-4 w-4 text-green-500" />
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               </CardContent>
             </Card>

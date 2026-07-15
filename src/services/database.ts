@@ -4,6 +4,13 @@ import type {
   Log, Notification, FileItem, Settings, Profile
 } from '@/types';
 
+// Schema
+export async function getDatabaseSchema(): Promise<any> {
+  const { data, error } = await supabase.rpc('get_database_schema');
+  if (error) throw error;
+  return data;
+}
+
 // Agents
 export async function getAgents(userId: string): Promise<Agent[]> {
   const { data, error } = await supabase

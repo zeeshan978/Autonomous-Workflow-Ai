@@ -39,7 +39,7 @@ export function ParticleTrail() {
       size: number;
     }
 
-    let particles: Particle[] = [];
+    const particles: Particle[] = [];
     let animationFrameId: number;
     let mouseX = -1000;
     let mouseY = -1000;

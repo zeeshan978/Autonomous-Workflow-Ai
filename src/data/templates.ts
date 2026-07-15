@@ -43,7 +43,7 @@ export const DEFAULT_TEMPLATES: TemplateDefinition[] = [
     nodes: [
       { id: '1', type: 'custom', position: { x: 100, y: 150 }, data: { node_type: 'api_call', label: 'Fetch Sales Data', config: { url: 'https://dummyjson.com/products?limit=10', method: 'GET', headers: {} } } },
       { id: '2', type: 'custom', position: { x: 400, y: 150 }, data: { node_type: 'ai_prompt', label: 'Analyze Trends', config: { prompt: 'Analyze this sales data and provide 3 key insights: ${fetch_sales_data.response}', system_prompt: 'You are a senior data analyst.' } } },
-      { id: '3', type: 'custom', position: { x: 700, y: 150 }, data: { node_type: 'database', label: 'Save Report', config: { operation: 'insert', table: 'sales_reports', data: { insights: '${analyze_trends.result}', date: '${current_date}' } } } },
+      { id: '3', type: 'custom', position: { x: 700, y: 150 }, data: { node_type: 'database', label: 'Save Report', config: { operation: 'insert', table: 'tickets', data: { subject: 'Weekly Sales Analysis', description: '${analyze_trends.result}', status: 'open' } } } },
       { id: '4', type: 'custom', position: { x: 1000, y: 150 }, data: { node_type: 'notification', label: 'Notify Team', config: { title: 'Weekly Sales Analysis Ready', message: 'The AI has identified new trends.', channel: 'Slack' } } }
     ],
     edges: [
@@ -60,7 +60,7 @@ export const DEFAULT_TEMPLATES: TemplateDefinition[] = [
     estimated_time: '4 mins',
     variables: {},
     nodes: [
-      { id: '1', type: 'custom', position: { x: 100, y: 150 }, data: { node_type: 'database', label: 'Fetch Analytics', config: { operation: 'select', table: 'analytics_daily', query: 'SELECT * FROM analytics_daily WHERE date >= date_sub(current_date, 7)' } } },
+      { id: '1', type: 'custom', position: { x: 100, y: 150 }, data: { node_type: 'database', label: 'Fetch Analytics', config: { operation: 'select', table: 'orders', query: "created_at >= NOW() - INTERVAL '7 days'" } } },
       { id: '2', type: 'custom', position: { x: 400, y: 150 }, data: { node_type: 'ai_prompt', label: 'Summarize Report', config: { prompt: 'Summarize the weekly analytics data into a short executive summary: ${fetch_analytics.result}' } } },
       { id: '3', type: 'custom', position: { x: 700, y: 150 }, data: { node_type: 'email', label: 'Distribute Report', config: { to: 'execs@company.com', subject: 'Weekly Analytics Report', body: '${summarize_report.result}' } } }
     ],
@@ -172,10 +172,10 @@ export const DEFAULT_TEMPLATES: TemplateDefinition[] = [
     featured: true,
     variables: {},
     nodes: [
-      { id: '1', type: 'custom', position: { x: 100, y: 150 }, data: { node_type: 'database', label: 'Find Inactive Users', config: { operation: 'select', table: 'users', query: 'last_login < now() - interval 30 day' } } },
-      { id: '2', type: 'custom', position: { x: 400, y: 150 }, data: { node_type: 'ai_prompt', label: 'Personalize Email', config: { prompt: 'Write a re-engagement email for ${user.first_name} who used feature ${user.favorite_feature}.' } } },
-      { id: '3', type: 'custom', position: { x: 700, y: 150 }, data: { node_type: 'email', label: 'Send Outreach', config: { to: '${user.email}', subject: 'We miss you, ${user.first_name}!', body: '${personalize_email.result}' } } },
-      { id: '4', type: 'custom', position: { x: 1000, y: 150 }, data: { node_type: 'database', label: 'Log Campaign', config: { operation: 'insert', table: 'email_logs' } } }
+      { id: '1', type: 'custom', position: { x: 100, y: 150 }, data: { node_type: 'database', label: 'Find Inactive Users', config: { operation: 'select', table: 'customers', query: "status = 'inactive'" } } },
+      { id: '2', type: 'custom', position: { x: 400, y: 150 }, data: { node_type: 'ai_prompt', label: 'Personalize Email', config: { prompt: 'Write a re-engagement email for ${customer.first_name}.' } } },
+      { id: '3', type: 'custom', position: { x: 700, y: 150 }, data: { node_type: 'email', label: 'Send Outreach', config: { to: '${customer.email}', subject: 'We miss you, ${customer.first_name}!', body: '${personalize_email.result}' } } },
+      { id: '4', type: 'custom', position: { x: 1000, y: 150 }, data: { node_type: 'database', label: 'Log Campaign', config: { operation: 'insert', table: 'tickets', data: { subject: 'Marketing Outreach Sent', description: 'Re-engagement campaign sent to inactive user', status: 'open' } } } }
     ],
     edges: [
       { id: 'e1-2', source: '1', target: '2' },
@@ -230,8 +230,8 @@ export const COMMUNITY_TEMPLATES: TemplateDefinition[] = [
     author: 'data_ninja',
     variables: {},
     nodes: [
-      { id: '1', type: 'custom', position: { x: 100, y: 150 }, data: { node_type: 'database', label: 'Query KPIs', config: { operation: 'select', table: 'metrics' } } },
-      { id: '2', type: 'custom', position: { x: 400, y: 150 }, data: { node_type: 'notification', label: 'Slack Notification', config: { channel: 'Slack', message: 'KPIs: ${metrics}' } } }
+      { id: '1', type: 'custom', position: { x: 100, y: 150 }, data: { node_type: 'database', label: 'Query KPIs', config: { operation: 'select', table: 'orders' } } },
+      { id: '2', type: 'custom', position: { x: 400, y: 150 }, data: { node_type: 'notification', label: 'Slack Notification', config: { channel: 'Slack', message: 'KPIs: ${query_kpis.count} total orders.' } } }
     ],
     edges: [
       { id: 'e1-2', source: '1', target: '2' }

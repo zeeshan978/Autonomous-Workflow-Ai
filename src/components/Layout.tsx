@@ -71,11 +71,6 @@ export function Layout({ children }: LayoutProps) {
       .catch(() => {});
   }, [user?.id]);
 
-  // If no session at all, redirect to auth
-  if (!user && !session) {
-    return <Navigate to="/auth" replace />;
-  }
-
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === '/' && !e.ctrlKey && !e.metaKey) {
@@ -108,9 +103,14 @@ export function Layout({ children }: LayoutProps) {
       setSearching(false);
     };
 
-    const timeout = setTimeout(search, 300);
-    return () => clearTimeout(timeout);
+    const debounce = setTimeout(search, 300);
+    return () => clearTimeout(debounce);
   }, [searchQuery, user?.id]);
+
+  // If no session at all, redirect to auth
+  if (!user && !session) {
+    return <Navigate to="/auth" replace />;
+  }
 
   const handleSearchNavigate = (type: string, id: string) => {
     const paths: Record<string, string> = {

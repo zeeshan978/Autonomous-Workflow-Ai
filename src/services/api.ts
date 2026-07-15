@@ -29,28 +29,34 @@ export interface GeneratedWorkflow {
 
 const WORKFLOW_SYSTEM_PROMPT = `You are an AI workflow generator for an automation platform (similar to Zapier/Make). Given a user prompt, generate a fully configured, executable workflow.
 
-Available node types:
-- ai_prompt: Execute an AI prompt
-- condition: Check a condition and branch (outputs handles 'true' and 'false')
-- delay: Wait for a specified time (ms)
-- database: Query or modify the database
-- email: Send an email
-- api_call: Make an HTTP API request
-- webhook: Receive or send webhook data
-- loop: Iterate over items (outputs handle 'body')
-- decision: Make a decision based on data
-- file_upload: Handle file uploads
-- notification: Create notifications
-- export: Export data to a file
+Available node types and their EXACT config fields (use these field names precisely — the executor will not recognize any others):
 
-Available Database Tables:
-users, workflows, workflow_steps, executions, logs, schedules, weather_reports, notifications, settings, api_keys, agents, files, profiles
+- ai_prompt: { prompt: string, system_prompt?: string }
+- condition: { condition: string }  // e.g. "\${node_name.count} > 0"
+- delay: { duration: number }  // milliseconds
+- database: { operation: "select"|"insert"|"update"|"delete", table: string, columns?: string, filters?: object, record?: object, updates?: object, limit?: number }
+  - select/query: use "filters" (object of column:value pairs), NOT raw SQL
+  - insert: use "record" (object of column:value pairs)
+  - update: use "updates" (object of column:value pairs) + "filters"
+  - delete: requires "filters" (at least one, for safety)
+- email: { to: string, subject: string, body: string }
+- api_call: { url: string, method: string, headers?: object, query_params?: object, body?: string|object }
+- webhook: { url: string, payload?: object }
+- loop: { items: string }  // MUST reference a prior node's array output, e.g. "\${fetch_users.rows}" — NOT "iterate", and NOT a bare iteration count when real data exists
+- decision: { condition: string, true_label?: string, false_label?: string }
+- file_upload: { filename: string }
+- notification: { title: string, message: string }
+- export: { format: "json"|"csv", data_key?: string }
+
+Available Database Tables (ONLY these exist — do not invent others):
+users, profiles, agents, workflows, workflow_steps, executions, tasks, logs, notifications, reports, settings, files, api_keys, audit_logs, schedules
 
 IMPORTANT RULES:
-1. FULLY CONFIGURE nodes: Fill in prompt text, API URLs, email subjects, and DB queries.
-2. AUTO VARIABLE MAPPING: If a database node returns "users", subsequent nodes must use the variable syntax. E.g. \${node_id.outputField} or \${node_id.data} or \${database.rows}. Ensure variables flow logically.
-3. EDGES: Connect nodes explicitly. Use sourceHandle "true"/"false" for conditions, and "body" for loops.
+1. FULLY CONFIGURE nodes using the EXACT field names above. Do not use "action", "query" (as raw SQL), "iterate", or any other field name not listed.
+2. AUTO VARIABLE MAPPING: A database node's output is available as \${node_label_lowercase_with_underscores.rows} (array) and \${node_label_lowercase_with_underscores.count}. Inside a loop, the current item is \${item} and its fields as \${item.column_name}. Ensure variables flow logically and only reference outputs that actually exist earlier in the graph.
+3. EDGES: Connect nodes explicitly. Use sourceHandle "true"/"false" for conditions, and "body" for loops (with a second edge using sourceHandle "next" for what runs after the loop finishes).
 4. AUTO LAYOUT: Provide { x, y } positions for nodes. Align them vertically (y + 150) or horizontally (x + 300).
+5. If the request requires a table, integration, or credential that is not in the list above or not confirmed available, do NOT invent it — instead set node config field "needs_configuration": true and describe what's missing in a "configuration_note" field on that node.
 
 Respond ONLY with a JSON object containing:
 {
@@ -61,7 +67,7 @@ Respond ONLY with a JSON object containing:
       "id": "node_1",
       "type": "database",
       "name": "Fetch inactive users",
-      "config": { "query": "SELECT * FROM users WHERE status = 'inactive'" },
+      "config": { "operation": "select", "table": "users", "filters": { "status": "inactive" } },
       "position": { "x": 100, "y": 100 }
     }
   ],

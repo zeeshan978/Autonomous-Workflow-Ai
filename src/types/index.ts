@@ -66,7 +66,7 @@ export interface Workflow {
   nodes: WorkflowNode[];
   edges: WorkflowEdge[];
   variables: Record<string, unknown>;
-  status: 'draft' | 'active' | 'archived';
+  status: 'draft' | 'active' | 'archived' | 'needs_configuration';
   is_template: boolean;
   created_at: string;
   updated_at: string;
@@ -92,6 +92,7 @@ export interface Execution {
   status: 'queued' | 'running' | 'completed' | 'failed' | 'cancelled';
   progress: number;
   result: Record<string, unknown> | null;
+  report?: any;
   error_message: string | null;
   started_at: string | null;
   completed_at: string | null;

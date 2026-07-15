@@ -12,13 +12,123 @@ import { supabase } from '@/lib/supabase';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
+export const ALLOWED_TABLES = [
+  'users', 'profiles', 'agents', 'workflows', 'workflow_steps', 'executions', 
+  'tasks', 'logs', 'notifications', 'reports', 'settings', 'files', 
+  'api_keys', 'audit_logs', 'schedules'
+];
+
 export interface ExecutionContext {
   workflowId: string;
   executionId: string;
   userId: string;
   variables: Record<string, unknown>;
   onProgress?: (progress: number, status: string) => void;
-  onLog?: (level: string, message: string) => void;
+  onLog?: (level: string, message: string, metadata?: Record<string, unknown>) => void;
+}
+
+export interface ExecutionIssue {
+  nodeId: string;
+  nodeName: string;
+  nodeType: string;
+  field?: string;
+  severity: 'error' | 'warning';
+  message: string;
+  reason?: string;
+  suggestion?: string;
+  rawError?: string;
+}
+
+export function buildExecutionIssue(node: WorkflowNode | { id: string, data?: { label?: string, config?: any } }, nodeType: string, rawError: string, context?: any): ExecutionIssue {
+  const issue: ExecutionIssue = {
+    nodeId: node.id,
+    nodeName: ((node as any).data?.label as string) || nodeType,
+    nodeType,
+    severity: 'error',
+    message: 'This step failed.',
+    reason: rawError,
+    suggestion: 'Check the raw error details below.',
+    rawError
+  };
+
+  const errStr = String(rawError).toLowerCase();
+
+  // Database checks
+  if (nodeType === 'database') {
+    if (errStr.includes('table name is required')) {
+      issue.message = 'No table selected';
+      issue.reason = undefined;
+      issue.suggestion = 'Choose a table for this Database node.';
+      issue.field = 'table';
+    } else if (errStr.includes('does not exist in the database')) {
+      const match = rawError.match(/Table "([^"]+)" does not exist/i);
+      const tableName = match ? match[1] : 'selected';
+      issue.message = `Table "${tableName}" was not found or is not accessible.`;
+      issue.reason = undefined;
+      issue.suggestion = 'Select an available table from the list.';
+      issue.field = 'table';
+    } else if (errStr.includes('database error') || errStr.includes('supabase') || errStr.includes('relation') || errStr.includes('policy') || errStr.includes('permission')) {
+      issue.message = 'The database rejected this operation.';
+      const reasonMatch = rawError.match(/(?:database error|error):?\s*(.*)/i);
+      issue.reason = reasonMatch ? reasonMatch[1].trim() : rawError;
+      
+      const operation = ((node as any).data?.config as any)?.operation || 'select';
+      if (errStr.includes('policy') || errStr.includes('permission') || errStr.includes('row level security')) {
+        issue.suggestion = 'This operation may be blocked by Row Level Security — check that the row\'s owner matches the logged-in user.';
+      } else if (operation === 'insert') {
+        issue.suggestion = "Check that all required columns are provided and match the table's schema.";
+      } else {
+        issue.suggestion = "Check the database configuration or query parameters.";
+      }
+    }
+  }
+
+  // Email checks
+  else if (nodeType === 'email') {
+    if (errStr.includes('"to" address is required')) {
+      issue.message = 'Recipient email is missing.';
+      issue.reason = undefined;
+      issue.suggestion = "Set the 'to' field on this Email node, or map it from a prior node's output.";
+      issue.field = 'to';
+    } else if (errStr.includes('email delivery failed')) {
+      issue.message = 'Email could not be sent.';
+      issue.reason = rawError.replace(/^Error:\s*Email delivery failed:?/i, '').trim();
+      issue.suggestion = 'Check the Resend API key configuration in Supabase, and confirm the recipient address is valid.';
+    }
+  }
+
+  // API / Webhook checks
+  else if (nodeType === 'api_call' || nodeType === 'webhook' || nodeType === 'api') {
+    if (errStr.includes('url is required')) {
+      issue.message = 'No URL configured.';
+      issue.reason = undefined;
+      issue.suggestion = 'Set the URL field on this node.';
+      issue.field = 'url';
+    } else if (errStr.includes('api returned') || errStr.includes('status code')) {
+      const match = rawError.match(/(?:status|returned)\s*(\d{3})/i);
+      const status = match ? match[1] : '';
+      issue.message = 'The external API request failed.';
+      issue.reason = rawError;
+      if (status === '401' || status === '403') {
+        issue.suggestion = 'Check the API credentials/headers for this call.';
+      } else if (status === '404') {
+        issue.suggestion = 'Check the URL — the endpoint was not found.';
+      } else if (status.startsWith('5')) {
+        issue.suggestion = 'The external API is failing — this may be temporary.';
+      } else {
+        issue.suggestion = 'Check the API response details below.';
+      }
+    }
+  }
+
+  // Variable resolution
+  if (errStr.includes('unresolved variable') || /variable .*\$\{.*\}.* not found/i.test(errStr) || errStr.includes('undefined variable')) {
+    issue.message = 'A required value could not be found.';
+    issue.reason = rawError;
+    issue.suggestion = 'Check that an earlier node actually produces this value, and that the variable name matches exactly.';
+  }
+
+  return issue;
 }
 
 // ─── Public API ───────────────────────────────────────────────────────────────
@@ -102,14 +212,14 @@ async function syncWorkflowSteps(workflow: Workflow): Promise<void> {
 async function executeWorkflow(context: ExecutionContext): Promise<void> {
   const { workflowId, executionId, variables, onProgress, onLog } = context;
 
-  const log = async (level: string, message: string) => {
+  const log = async (level: string, message: string, metadata?: Record<string, unknown>) => {
     await createLog({
       execution_id: executionId,
       level: level as 'debug' | 'info' | 'warn' | 'error',
       message,
-      metadata: {}
+      metadata: metadata || {}
     });
-    onLog?.(level, message);
+    onLog?.(level, message, metadata);
   };
 
   try {
@@ -156,6 +266,15 @@ async function executeWorkflow(context: ExecutionContext): Promise<void> {
     const branchDecisions = new Map<string, string>(); // nodeId -> branch/selected
     const loopHandledNodes = new Set<string>();
 
+    const report = {
+      nodes: [] as any[],
+      startTime: new Date().toISOString(),
+      endTime: null as string | null,
+      totalNodes: orderedNodes.length,
+      executedNodes: 0,
+      failedNodes: 0,
+    };
+
     // Execute each node in topological order
     for (let i = 0; i < orderedNodes.length; i++) {
       const node = orderedNodes[i];
@@ -163,6 +282,7 @@ async function executeWorkflow(context: ExecutionContext): Promise<void> {
       const nodeType = resolveNodeType(node);
       const nodeName = (node.data?.label as string) || nodeType;
       const nodeConfig = buildNodeConfig(node, edges, ctx);
+      const nodeStartTime = new Date().toISOString();
 
       // Find or create the step record
       const steps = await getWorkflowSteps(workflowId);
@@ -253,41 +373,87 @@ async function executeWorkflow(context: ExecutionContext): Promise<void> {
         ctx[`${normalizedName}_output`] = result; // legacy
         ctx[normalizedName] = result;             // exact name mapping (e.g. analyze_weather)
 
+        report.nodes.push({
+          id: node.id,
+          name: nodeName,
+          type: nodeType,
+          status: 'success',
+          startTime: nodeStartTime,
+          endTime: new Date().toISOString()
+        });
+        report.executedNodes++;
+
         await updateWorkflowStep(step.id, { status: 'completed' });
         await updateExecution(executionId, { progress });
         onProgress?.(progress, `${nodeName} completed`);
         await log('info', `✓ ${nodeName} completed`);
 
       } catch (nodeError) {
-        const msg = nodeError instanceof Error ? nodeError.message : String(nodeError);
-        await log('error', `✗ ${nodeName} failed: ${msg}`);
+        const rawMsg = nodeError instanceof Error ? nodeError.message : String(nodeError);
+        const continueOnFail = !!nodeConfig.continueOnFail;
+        const issue = buildExecutionIssue(node, nodeType, rawMsg, ctx);
+        const issueJson = JSON.stringify(issue);
+        
+        report.nodes.push({
+          id: node.id,
+          name: nodeName,
+          type: nodeType,
+          status: 'failed',
+          startTime: nodeStartTime,
+          endTime: new Date().toISOString(),
+          error: issue.message,
+          ignored: continueOnFail
+        });
+        report.failedNodes++;
+
+        if (continueOnFail) {
+          await log('warn', `✗ ${nodeName} failed but continueOnFail is true: ${issue.message}`, { issue });
+          await updateWorkflowStep(step.id, { status: 'failed' });
+          continue;
+        }
+
+        await log('error', `✗ ${nodeName} failed: ${issue.message}`, { issue });
         await updateWorkflowStep(step.id, { status: 'failed' });
+        
+        report.endTime = new Date().toISOString();
         await updateExecution(executionId, {
           status: 'failed',
-          error_message: `Node "${nodeName}" failed: ${msg}`,
-          completed_at: new Date().toISOString()
+          error_message: issueJson,
+          completed_at: report.endTime,
+          result: { variables: ctx, report }
         });
         return;
       }
     }
 
+    report.endTime = new Date().toISOString();
     // All nodes succeeded
     await updateExecution(executionId, {
       status: 'completed',
       progress: 100,
-      completed_at: new Date().toISOString(),
-      result: { variables: ctx }
+      completed_at: report.endTime,
+      result: { variables: ctx, report }
     });
 
     await log('info', 'Workflow execution completed successfully');
     onProgress?.(100, 'Completed');
 
   } catch (error) {
-    const msg = error instanceof Error ? error.message : String(error);
-    await log('error', `Workflow failed: ${msg}`);
+    const rawMsg = error instanceof Error ? error.message : String(error);
+    const issue: ExecutionIssue = {
+        nodeId: 'global',
+        nodeName: 'Workflow Engine',
+        nodeType: 'system',
+        severity: 'error',
+        message: 'Workflow execution failed.',
+        reason: rawMsg,
+        suggestion: 'Check the raw error details below.',
+        rawError: rawMsg
+    };
+    await log('error', `Workflow failed: ${issue.message}`, { issue });
     await updateExecution(executionId, {
       status: 'failed',
-      error_message: msg,
+      error_message: JSON.stringify(issue),
       completed_at: new Date().toISOString()
     }).catch(console.error);
     onProgress?.(0, 'Failed');
@@ -510,12 +676,6 @@ async function executeDatabaseNode(
   const table = String(config.table || '');
   if (!table) throw new Error('Database node: table name is required');
 
-  const ALLOWED_TABLES = [
-    'users', 'workflows', 'workflow_steps', 'executions', 'logs', 
-    'reports', 'weather_reports', 'notifications', 'tasks', 'settings', 
-    'api_keys', 'agents', 'files', 'profiles'
-  ];
-
   if (!ALLOWED_TABLES.includes(table)) {
     throw new Error(`Database error: Table "${table}" does not exist in the database. Please use an existing table (e.g., users).`);
   }
@@ -576,7 +736,7 @@ async function executeDatabaseNode(
       if (!updates) throw new Error('Database update node: updates are required');
 
       // Build the update query with filters chained
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+       
       let query: any = supabase.from(table).update(updates);
       if (filters) {
         for (const [col, val] of Object.entries(filters)) {
@@ -853,7 +1013,7 @@ async function executeFileUpload(
  * Nodes with no incoming edges execute first.
  * If there are cycles or disconnected nodes, they are appended after the sorted set.
  */
-function topologicalSort(
+export function topologicalSort(
   nodes: WorkflowNode[],
   edges: WorkflowEdge[]
 ): WorkflowNode[] {
@@ -932,19 +1092,80 @@ function buildNodeConfig(
   return { ...rest, ...dataConfig };
 }
 
+function levenshteinDistance(a: string, b: string): number {
+  if (!a) return b ? b.length : 0;
+  if (!b) return a.length;
+  const matrix = Array.from({ length: a.length + 1 }, () => Array(b.length + 1).fill(0));
+  for (let i = 0; i <= a.length; i++) matrix[i][0] = i;
+  for (let j = 0; j <= b.length; j++) matrix[0][j] = j;
+
+  for (let i = 1; i <= a.length; i++) {
+    for (let j = 1; j <= b.length; j++) {
+      if (a[i - 1] === b[j - 1]) {
+        matrix[i][j] = matrix[i - 1][j - 1];
+      } else {
+        matrix[i][j] = Math.min(
+          matrix[i - 1][j - 1] + 1, // substitution
+          matrix[i][j - 1] + 1,     // insertion
+          matrix[i - 1][j] + 1      // deletion
+        );
+      }
+    }
+  }
+  return matrix[a.length][b.length];
+}
+
+function findClosestMatch(target: string, options: string[]): string | null {
+  if (options.length === 0) return null;
+  let minDistance = Infinity;
+  let closestMatch = null;
+  
+  for (const option of options) {
+    const dist = levenshteinDistance(target.toLowerCase(), option.toLowerCase());
+    if (dist < minDistance && dist <= 3) {
+      minDistance = dist;
+      closestMatch = option;
+    }
+  }
+  return closestMatch;
+}
+
 /**
  * Replaces `${variable}` and `${nested.key}` placeholders in a template string
  * with values from the context.
+ * Throws an error with Levenshtein-based suggestions if a variable is missing.
  */
-function interpolate(template: string, ctx: Record<string, unknown>): string {
-  return template.replace(/\$\{([^}]+)\}/g, (_match, key) => {
-    const value = key.split('.').reduce((obj: unknown, k: string) => {
-      if (obj !== null && typeof obj === 'object') {
-        return (obj as Record<string, unknown>)[k];
+export function interpolate(template: string, ctx: Record<string, unknown>): string {
+  if (typeof template !== 'string') return template;
+  
+  return template.replace(/\$\{([^}]+)\}/g, (_match, rawKey) => {
+    const key = rawKey.trim();
+    const parts = key.split('.');
+    
+    let currentCtx: unknown = ctx;
+    let pathFound = '';
+    
+    for (let i = 0; i < parts.length; i++) {
+      const part = parts[i];
+      pathFound = pathFound ? `${pathFound}.${part}` : part;
+      
+      if (currentCtx === null || typeof currentCtx !== 'object') {
+         throw new Error(`Cannot resolve "\${${key}}". "${parts.slice(0, i).join('.')}" is not an object.`);
       }
-      return undefined;
-    }, ctx as unknown);
-    return value !== undefined && value !== null ? String(value) : _match;
+      
+      const recordCtx = currentCtx as Record<string, unknown>;
+      
+      if (!(part in recordCtx)) {
+         const availableKeys = Object.keys(recordCtx).filter(k => !k.endsWith('_output')); // hide legacy outputs
+         const closest = findClosestMatch(part, availableKeys);
+         const suggestion = closest ? ` Did you mean "${closest}"?` : ` Available variables: ${availableKeys.join(', ')}`;
+         throw new Error(`Missing variable "\${${pathFound}}".${suggestion}`);
+      }
+      
+      currentCtx = recordCtx[part];
+    }
+    
+    return currentCtx !== undefined && currentCtx !== null ? String(currentCtx) : '';
   });
 }
 

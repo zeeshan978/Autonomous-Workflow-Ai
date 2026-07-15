@@ -1,7 +1,7 @@
-// @ts-ignore: Deno import
+// @ts-expect-error: Deno import
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts"
 
-// @ts-ignore: Deno global
+// @ts-expect-error: Deno global
 const GEMINI_API_KEY = Deno.env.get("GEMINI_API_KEY")
 
 serve(async (req: Request) => {
@@ -73,3 +73,4 @@ serve(async (req: Request) => {
     })
   }
 })
+
