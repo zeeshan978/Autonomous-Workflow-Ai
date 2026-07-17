@@ -311,7 +311,7 @@ export function Layout({ children }: LayoutProps) {
                     className={cn(
                       "flex items-center gap-3 px-3 py-2.5 rounded-xl transition-all duration-300 relative group overflow-hidden",
                       isActive
-                        ? "text-primary-foreground"
+                        ? "text-foreground"
                         : "text-muted-foreground hover:text-foreground hover:bg-white/5",
                       "max-lg:justify-center max-lg:px-0"
                     )}
@@ -319,8 +319,7 @@ export function Layout({ children }: LayoutProps) {
                     {isActive && (
                       <motion.div
                         layoutId="sidebar-active"
-                        className="absolute inset-0 bg-primary/20 border border-primary/40 rounded-xl backdrop-blur-sm"
-                        style={{ boxShadow: '0 0 20px var(--primary)' }}
+                        className="absolute inset-0 bg-primary/10 border border-primary/20 rounded-xl"
                         initial={false}
                         transition={{ type: "spring", stiffness: 300, damping: 30 }}
                       />
@@ -332,7 +331,7 @@ export function Layout({ children }: LayoutProps) {
                         hover: { ...item.hoverAnim, transition: ((item.hoverAnim as any)?.transition) || { duration: 0.25, ease: "easeOut" } }
                       }}
                     >
-                      <item.icon className={cn("h-5 w-5 shrink-0", isActive && "text-primary drop-shadow-[0_0_10px_rgba(var(--primary),0.8)]")} />
+                      <item.icon className={cn("h-5 w-5 shrink-0", isActive && "text-primary drop-shadow-md")} />
                     </motion.div>
                     <span className="relative z-10 font-medium tracking-wide hidden lg:block">{item.label}</span>
                   </Link>
@@ -362,7 +361,7 @@ export function Layout({ children }: LayoutProps) {
                         className={cn(
                           "flex items-center gap-3 px-3 py-2.5 rounded-xl transition-all duration-300 relative group overflow-hidden",
                           isActive
-                            ? "text-primary-foreground"
+                            ? "text-foreground"
                             : "text-muted-foreground hover:text-foreground hover:bg-white/5",
                           "max-lg:justify-center max-lg:px-0"
                         )}
@@ -370,8 +369,7 @@ export function Layout({ children }: LayoutProps) {
                         {isActive && (
                           <motion.div
                             layoutId="sidebar-active"
-                            className="absolute inset-0 bg-primary/20 border border-primary/40 rounded-xl backdrop-blur-sm"
-                            style={{ boxShadow: '0 0 20px var(--primary)' }}
+                            className="absolute inset-0 bg-primary/10 border border-primary/20 rounded-xl"
                             initial={false}
                             transition={{ type: "spring", stiffness: 300, damping: 30 }}
                           />
@@ -383,7 +381,7 @@ export function Layout({ children }: LayoutProps) {
                             hover: { ...item.hoverAnim, transition: ((item.hoverAnim as any)?.transition) || { duration: 0.25, ease: "easeOut" } }
                           }}
                         >
-                          <item.icon className={cn("h-5 w-5 shrink-0", isActive && "text-primary drop-shadow-[0_0_10px_rgba(var(--primary),0.8)]")} />
+                          <item.icon className={cn("h-5 w-5 shrink-0", isActive && "text-primary drop-shadow-md")} />
                         </motion.div>
                         <span className="relative z-10 font-medium tracking-wide hidden lg:block">{item.label}</span>
                       </Link>
@@ -411,8 +409,8 @@ export function Layout({ children }: LayoutProps) {
             exit={{ opacity: 0, y: -10, filter: 'blur(4px)' }}
             transition={{ duration: 0.25, ease: "easeOut" }}
             className={cn(
-              "p-6",
-              !location.pathname.includes('/workflows/builder') && "max-w-7xl mx-auto"
+              location.pathname.includes('/workflows/builder') ? "p-0 h-[calc(100vh-4rem)]" : "p-6 max-w-7xl mx-auto",
+              "w-full"
             )}
           >
             {children}

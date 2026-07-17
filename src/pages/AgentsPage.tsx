@@ -190,9 +190,9 @@ export function AgentsPage() {
         className="space-y-6"
       >
         {/* Header */}
-        <div className="flex items-center justify-between">
+        <div className="mb-8 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
           <div>
-            <h1 className="text-3xl font-bold">AI Agents</h1>
+            <h1 className="text-3xl font-bold tracking-tight mb-1">AI Agents</h1>
             <p className="text-muted-foreground">Manage your AI automation agents</p>
           </div>
           <Dialog open={showForm} onOpenChange={(open) => { setShowForm(open); if (!open) resetForm(); }}>
@@ -338,16 +338,10 @@ export function AgentsPage() {
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
             <AnimatePresence>
-              {filteredAgents.map((agent) => (
-                <motion.div
-                  key={agent.id}
-                  initial={{ opacity: 0, scale: 0.9 }}
-                  animate={{ opacity: 1, scale: 1 }}
-                  exit={{ opacity: 0, scale: 0.9 }}
-                  layout
-                >
-                  <Card className="hover:shadow-lg transition-shadow">
-                    <CardHeader className="pb-3">
+              {filteredAgents.map((agent, index) => (
+                <motion.div key={agent.id} initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} transition={{ duration: 0.2, delay: index * 0.05 }}>
+                  <Card className="glass-card hover:border-primary/50 transition-premium h-full flex flex-col">
+                    <CardHeader className="p-5 border-b border-border/50 pb-4">
                       <div className="flex items-start justify-between">
                         <div className="flex items-center gap-3">
                           <div className={`p-2 rounded-lg ${agent.status === 'active' ? 'bg-green-500/10' : 'bg-gray-500/10'}`}>
@@ -386,10 +380,10 @@ export function AgentsPage() {
                         </DropdownMenu>
                       </div>
                     </CardHeader>
-                    <CardContent>
+                    <CardContent className="p-5 flex-1">
                       <div className="flex items-center justify-between text-sm text-muted-foreground mb-3">
                         <span>{MODELS.find(m => m.id === agent.model)?.name || agent.model}</span>
-                        <Badge variant={agent.status === 'active' ? 'default' : 'secondary'}>
+                        <Badge variant={agent.status === 'active' ? 'default' : 'secondary'} className={agent.status === 'active' ? 'bg-green-500/10 text-green-500 border-green-500/30' : ''}>
                           {agent.status}
                         </Badge>
                       </div>

@@ -1,6 +1,6 @@
 import { useState, useCallback, useEffect, useRef, memo } from 'react';
 import { useAuth } from '@/hooks/useAuth';
-import { useNavigate, useParams, Link, useLocation } from 'react-router-dom';
+import { useNavigate, useParams, Link, useLocation, useSearchParams } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import ReactFlow, {
   Node, Edge, addEdge, useNodesState, useEdgesState,
@@ -10,10 +10,12 @@ import ReactFlow, {
 import 'reactflow/dist/style.css';
 import {
   Save, Play, Trash2, Settings, X, MessageSquare, GitBranch, Clock,
-  Database, Mail, Globe, Webhook, RefreshCw, Upload, Bell, Download, Sparkles,
+  Database, Mail, Globe, Webhook, RefreshCw, Upload, Bell, Download, Sparkles, Wand2,
   CheckCircle, XCircle, Loader2, Copy, Edit2, Plus, ChevronRight,
-  AlertCircle, Zap, List, Star, Tag, FileJson, ToggleLeft, ToggleRight, Archive, ArrowRight, AlertTriangle, SkipForward
+  AlertCircle, Zap, List, Star, Tag, FileJson, ToggleLeft, ToggleRight, Archive, ArrowRight, AlertTriangle, SkipForward, Activity, History,
+  MoreHorizontal, PanelLeftClose, PanelLeftOpen, Minimize2, Maximize2, ChevronLeft
 } from 'lucide-react';
+import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -21,15 +23,25 @@ import { Textarea } from '@/components/ui/textarea';
 import { Badge } from '@/components/ui/badge';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@/components/ui/alert-dialog';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue, SelectGroup, SelectLabel } from '@/components/ui/select';
 import { Separator } from '@/components/ui/separator';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { executeNode, resolveNodeType, buildNodeConfig, topologicalSort, buildExecutionIssue } from '@/services/executionEngine';
 import { useToast } from '@/hooks/use-toast';
 import { useUnsavedChanges } from '@/hooks/useUnsavedChanges';
 import { getWorkflow, createWorkflow, updateWorkflow, deleteWorkflow, getWorkflows, getExecution, getLogs } from '@/services/database';
 import { startExecution, cancelExecution } from '@/services/executionEngine';
 import { validateWorkflow, type ValidationResult, type ValidationIssue } from '@/services/workflowValidation';
+import { remapWorkflowIDs } from '@/lib/workflowRemap';
 import { getDatabaseSchema } from '@/services/database';
 import { supabase } from '@/lib/supabase';
 import type { Workflow as WorkflowType, Execution } from '@/types';
@@ -38,6 +50,8 @@ import { formatRelativeTime } from '@/lib/time';
 import { SimulationOverlay } from '@/components/SimulationOverlay';
 import { ParticleTrail } from '@/components/ParticleTrail';
 import confetti from 'canvas-confetti';
+import { WorkflowDoctorPanel } from '@/components/WorkflowDoctorPanel';
+import { WorkflowOutputViewer } from '@/components/WorkflowOutputViewer';
 
 // ─── Recently Opened (localStorage) ──────────────────────────────────────────
 const RECENT_KEY = 'recentWorkflows';
@@ -56,7 +70,7 @@ function getRecent(): { id: string; name: string }[] {
 }
 
 // ─── Node Status Colors ───────────────────────────────────────────────────────
-type NodeStatus = 'idle' | 'running' | 'success' | 'error' | 'skipped' | 'needs_configuration';
+type NodeStatus = 'idle' | 'running' | 'success' | 'error' | 'skipped' | 'needs_configuration' | 'waiting' | 'warning';
 
 // ─── Node Categories ──────────────────────────────────────────────────────────
 const NODE_CATEGORIES = [
@@ -104,29 +118,33 @@ const CustomNode = memo(function CustomNode({ data, selected }: { data: Record<s
   const errorData = data._errorData as { message?: string, reason?: string, suggestion?: string } | undefined;
 
   const statusBorder =
-    status === 'running' ? 'border-blue-500 shadow-blue-500/30 shadow-md' :
-    status === 'success' ? 'border-green-400 shadow-green-400/20 shadow-md' :
-    status === 'error'   ? 'border-red-500 shadow-red-500/30 shadow-lg ring-1 ring-red-500/50' :
-    status === 'skipped' ? 'border-gray-400 border-dashed opacity-70' :
-    status === 'needs_configuration' ? 'border-amber-400 shadow-amber-400/20 shadow-md' :
-    selected             ? 'border-primary' : 'border-border';
+    status === 'running' ? 'border-blue-500 shadow-[0_0_15px_rgba(59,130,246,0.5)] ring-1 ring-blue-500' :
+    status === 'waiting' ? 'border-gray-400 shadow-md opacity-80' :
+    status === 'success' ? 'border-green-500 shadow-[0_0_15px_rgba(34,197,94,0.3)] ring-1 ring-green-500/50' :
+    status === 'warning' ? 'border-amber-500 shadow-[0_0_15px_rgba(245,158,11,0.3)] ring-1 ring-amber-500/50' :
+    status === 'error'   ? 'border-red-500 shadow-[0_0_15px_rgba(239,68,68,0.5)] ring-1 ring-red-500' :
+    status === 'skipped' ? 'border-muted-foreground/50 border-dashed opacity-60 bg-muted/10' :
+    status === 'needs_configuration' ? 'border-amber-500 border-dashed shadow-md' :
+    selected             ? 'border-primary shadow-[0_0_20px_rgba(var(--primary),0.2)] ring-1 ring-primary/50' : 'border-border/60 shadow-sm hover:shadow-md hover:border-border';
 
   const nodeContent = (
     <motion.div
-      initial={{ scale: 0.8, opacity: 0 }}
+      initial={{ scale: 0.9, opacity: 0 }}
       animate={{ scale: 1, opacity: 1 }}
       transition={{ type: 'spring', stiffness: 300, damping: 20 }}
-      whileHover={{ y: -5, scale: 1.02, boxShadow: '0 0 20px hsl(var(--primary) / 0.3)', borderColor: 'hsl(var(--primary) / 0.5)' }}
-      className={`glass-card rounded-xl min-w-[200px] relative transition-all duration-300 ${statusBorder} ${status === 'running' ? 'animate-pulse' : ''} ${status === 'success' ? 'node-success' : ''}`}
+      whileHover={status === 'idle' ? { y: -2, scale: 1.01 } : {}}
+      className={`glass-panel rounded-xl min-w-[220px] max-w-[280px] relative transition-all duration-200 ${statusBorder} ${status === 'running' ? 'animate-pulse' : ''} ${status === 'success' ? 'node-success' : ''}`}
     >
       <Handle
         type="target"
         position={Position.Left}
         style={{ width: 12, height: 12, background: 'hsl(var(--primary))', border: '2px solid hsl(var(--background))', borderRadius: '50%', left: -6 }}
       />
-      <div className={`${colorClass} text-white px-3 py-2.5 rounded-t-xl flex items-center gap-2 bg-opacity-80 backdrop-blur-md`}>
+      <div className={`${colorClass} text-white px-3 py-2 rounded-t-xl flex items-center gap-2 relative overflow-hidden`}>
         {status === 'running' && <Loader2 className="h-3 w-3 animate-spin" />}
+        {status === 'waiting' && <Clock className="h-3 w-3 animate-pulse" />}
         {status === 'success' && <CheckCircle className="h-3 w-3" />}
+        {status === 'warning' && <AlertTriangle className="h-3 w-3 text-amber-200" />}
         {status === 'error'   && <AlertTriangle className="h-3 w-3 text-red-100" />}
         {status === 'skipped' && <SkipForward className="h-3 w-3" />}
         {status === 'needs_configuration' && <AlertTriangle className="h-3 w-3 text-amber-200" />}
@@ -138,11 +156,59 @@ const CustomNode = memo(function CustomNode({ data, selected }: { data: Record<s
           {(data.description as string) || configSummary(data)}
         </p>
       </div>
-      <Handle
-        type="source"
-        position={Position.Right}
-        style={{ width: 12, height: 12, background: 'hsl(var(--primary))', border: '2px solid hsl(var(--background))', borderRadius: '50%', right: -6 }}
-      />
+      {data.node_type === 'condition' ? (
+        <>
+          <div className="absolute -right-3 top-1/3 flex items-center group cursor-crosshair">
+            <span className="text-[9px] font-bold text-green-500 mr-1 opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap">TRUE</span>
+            <Handle
+              type="source"
+              id="true"
+              position={Position.Right}
+              className="!relative !right-0 !top-0 !transform-none"
+              style={{ width: 12, height: 12, background: '#22c55e', border: '2px solid hsl(var(--background))', borderRadius: '50%' }}
+            />
+          </div>
+          <div className="absolute -right-3 top-2/3 flex items-center group cursor-crosshair">
+            <span className="text-[9px] font-bold text-red-500 mr-1 opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap">FALSE</span>
+            <Handle
+              type="source"
+              id="false"
+              position={Position.Right}
+              className="!relative !right-0 !top-0 !transform-none"
+              style={{ width: 12, height: 12, background: '#ef4444', border: '2px solid hsl(var(--background))', borderRadius: '50%' }}
+            />
+          </div>
+        </>
+      ) : data.node_type === 'loop' ? (
+        <>
+          <div className="absolute -right-3 top-1/3 flex items-center group cursor-crosshair">
+            <span className="text-[9px] font-bold text-blue-400 mr-1 opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap">ITEM</span>
+            <Handle
+              type="source"
+              id="body"
+              position={Position.Right}
+              className="!relative !right-0 !top-0 !transform-none"
+              style={{ width: 12, height: 12, background: '#60a5fa', border: '2px solid hsl(var(--background))', borderRadius: '50%' }}
+            />
+          </div>
+          <div className="absolute -right-3 top-2/3 flex items-center group cursor-crosshair">
+            <span className="text-[9px] font-bold text-muted-foreground mr-1 opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap">NEXT</span>
+            <Handle
+              type="source"
+              id="next"
+              position={Position.Right}
+              className="!relative !right-0 !top-0 !transform-none"
+              style={{ width: 12, height: 12, background: 'hsl(var(--muted-foreground))', border: '2px solid hsl(var(--background))', borderRadius: '50%' }}
+            />
+          </div>
+        </>
+      ) : (
+        <Handle
+          type="source"
+          position={Position.Right}
+          style={{ width: 12, height: 12, background: 'hsl(var(--primary))', border: '2px solid hsl(var(--background))', borderRadius: '50%', right: -6 }}
+        />
+      )}
     </motion.div>
   );
 
@@ -184,12 +250,191 @@ function configSummary(data: Record<string, unknown>): string {
 
 const nodeTypes: NodeTypes = { custom: CustomNode };
 
+// ─── Visual Data Selectors ───────────────────────────────────────────────────
+
+const NODE_OUTPUT_SCHEMA: Record<string, { key: string, label: string }[]> = {
+  ai_prompt: [{ key: 'result', label: 'AI Result' }, { key: 'prompt', label: 'Used Prompt' }],
+  api_call: [{ key: 'data', label: 'Response Body' }, { key: 'status', label: 'Status Code' }, { key: 'headers', label: 'Response Headers' }],
+  database: [{ key: 'data', label: 'Returned Rows' }, { key: 'count', label: 'Row Count' }],
+  condition: [{ key: 'result', label: 'Boolean Result' }, { key: 'branch', label: 'Taken Branch' }],
+  decision: [{ key: 'result', label: 'Boolean Result' }, { key: 'selected', label: 'Selected Branch' }],
+  delay: [{ key: 'waited_ms', label: 'Waited Milliseconds' }],
+  email: [{ key: 'sent', label: 'Sent Status' }, { key: 'response', label: 'API Response' }],
+  notification: [{ key: 'created', label: 'Created Status' }, { key: 'id', label: 'Notification ID' }],
+  webhook: [{ key: 'data', label: 'Response Body' }, { key: 'status', label: 'Status Code' }],
+  export: [{ key: 'data', label: 'Exported String' }, { key: 'format', label: 'Format' }, { key: 'size', label: 'Size (bytes)' }],
+  loop: [{ key: 'results', label: 'Results Array' }, { key: 'iterations', label: 'Iteration Count' }]
+};
+
+const getAvailableOutputs = (node: any) => {
+  const nodeType = node.data?.node_type || node.type || 'unknown';
+  const baseOutputs = [...(NODE_OUTPUT_SCHEMA[nodeType] || [{ key: 'output', label: 'Output Data' }])];
+  
+  if (node.data && node.data._lastOutput && typeof node.data._lastOutput === 'object' && !Array.isArray(node.data._lastOutput)) {
+    const extractKeys = (obj: any, prefix = ''): { key: string, label: string }[] => {
+      let keys: { key: string, label: string }[] = [];
+      for (const k in obj) {
+        if (!Object.prototype.hasOwnProperty.call(obj, k)) continue;
+        const val = obj[k];
+        const newKey = prefix ? `${prefix}.${k}` : k;
+        
+        // Skip keys that already exist in baseOutputs to avoid duplicates
+        if (!prefix && baseOutputs.some(bo => bo.key === newKey)) continue;
+
+        if (val !== null && typeof val === 'object' && !Array.isArray(val)) {
+          // It's a nested object, recurse
+          keys = [...keys, ...extractKeys(val, newKey)];
+        } else {
+          // Leaf node or array
+          keys.push({ key: newKey, label: Array.isArray(val) ? `[List] ${k}` : k });
+        }
+      }
+      return keys;
+    };
+    
+    // For API calls, maybe we just extract from `data`
+    const sourceObj = nodeType === 'api_call' && typeof node.data._lastOutput.data === 'object' 
+      ? node.data._lastOutput.data 
+      : node.data._lastOutput;
+      
+    const prefix = nodeType === 'api_call' && sourceObj === node.data._lastOutput.data ? 'data.' : '';
+    
+    const dynamicKeys = extractKeys(sourceObj, prefix);
+    return [...baseOutputs, ...dynamicKeys];
+  }
+
+  return baseOutputs;
+};
+
+const VariableSelector = ({ value, onChange, availableNodes, placeholder }: any) => {
+  return (
+    <div className="flex gap-2">
+      <Input className="flex-1" value={value || ''} onChange={e => onChange(e.target.value)} placeholder={placeholder} />
+      <Select onValueChange={v => {
+        const current = value || '';
+        onChange(current + v);
+      }}>
+        <SelectTrigger className="w-10 px-0 flex justify-center shrink-0"><Plus className="h-4 w-4" /></SelectTrigger>
+        <SelectContent>
+          <ScrollArea className="h-64">
+            {availableNodes.map((n: any) => {
+              const outputs = getAvailableOutputs(n);
+              return (
+                <SelectGroup key={n.id}>
+                  <SelectLabel className="text-xs text-muted-foreground bg-muted/30">{n.data.label}</SelectLabel>
+                  {outputs.map(out => (
+                    <SelectItem key={`${n.id}-${out.key}`} value={`\${node_${n.id}.${out.key}}`}>
+                      {out.label}
+                    </SelectItem>
+                  ))}
+                </SelectGroup>
+              );
+            })}
+            <SelectGroup>
+              <SelectLabel className="text-xs text-muted-foreground bg-muted/30">System Variables</SelectLabel>
+              <SelectItem value="${item}">Loop Item (if inside loop)</SelectItem>
+            </SelectGroup>
+          </ScrollArea>
+        </SelectContent>
+      </Select>
+    </div>
+  );
+};
+
+const VariableSelectorTextarea = ({ value, onChange, availableNodes, placeholder, rows = 3 }: any) => {
+  return (
+    <div className="space-y-2">
+      <div className="flex justify-between items-center">
+        <span className="text-xs text-muted-foreground">Type or insert dynamic data:</span>
+        <Select onValueChange={v => {
+          const current = value || '';
+          onChange(current + (current && !current.endsWith(' ') ? ' ' : '') + v);
+        }}>
+          <SelectTrigger className="w-[120px] h-7 text-xs border-dashed"><Plus className="h-3 w-3 mr-1" /> Insert Data</SelectTrigger>
+          <SelectContent>
+            <ScrollArea className="h-64">
+              {availableNodes.map((n: any) => {
+                const outputs = getAvailableOutputs(n);
+                return (
+                  <SelectGroup key={n.id}>
+                    <SelectLabel className="text-xs text-muted-foreground bg-muted/30">{n.data.label}</SelectLabel>
+                    {outputs.map(out => (
+                      <SelectItem key={`${n.id}-${out.key}`} value={`\${node_${n.id}.${out.key}}`}>
+                        {out.label}
+                      </SelectItem>
+                    ))}
+                  </SelectGroup>
+                );
+              })}
+              <SelectGroup>
+                <SelectLabel className="text-xs text-muted-foreground bg-muted/30">System Variables</SelectLabel>
+                <SelectItem value="${item}">Loop Item (if inside loop)</SelectItem>
+              </SelectGroup>
+            </ScrollArea>
+          </SelectContent>
+        </Select>
+      </div>
+      <Textarea className="w-full font-mono text-xs" value={value || ''} onChange={e => onChange(e.target.value)} placeholder={placeholder} rows={rows} />
+    </div>
+  );
+};
+
+const DatabaseEasyMode = ({ filters, onChange, availableNodes }: any) => {
+  let entries: {key: string, val: string}[] = [];
+  if (typeof filters === 'object' && filters !== null) {
+    entries = Object.entries(filters).map(([k, v]) => ({ key: k, val: String(v) }));
+  } else if (typeof filters === 'string') {
+    try {
+      const parsed = JSON.parse(filters);
+      entries = Object.entries(parsed).map(([k, v]) => ({ key: k, val: String(v) }));
+    } catch {
+      // unparseable
+    }
+  }
+
+  const updateEntry = (idx: number, key: string, val: string) => {
+    const newEntries = [...entries];
+    newEntries[idx] = { key, val };
+    const newObj = Object.fromEntries(newEntries.map(e => [e.key, e.val]));
+    onChange(JSON.stringify(newObj, null, 2));
+  };
+  
+  const removeEntry = (idx: number) => {
+    const newEntries = entries.filter((_, i) => i !== idx);
+    const newObj = Object.fromEntries(newEntries.map(e => [e.key, e.val]));
+    onChange(JSON.stringify(newObj, null, 2));
+  };
+
+  const addEntry = () => {
+    const newEntries = [...entries, { key: '', val: '' }];
+    const newObj = Object.fromEntries(newEntries.map(e => [e.key, e.val]));
+    onChange(JSON.stringify(newObj, null, 2));
+  };
+
+  return (
+    <div className="space-y-2 border border-border p-2 rounded-md bg-muted/20">
+      {entries.map((e, idx) => (
+        <div key={idx} className="flex gap-2 items-center">
+          <Input className="w-1/3" placeholder="Column" value={e.key} onChange={ev => updateEntry(idx, ev.target.value, e.val)} />
+          <span className="text-xs text-muted-foreground">=</span>
+          <div className="flex-1">
+             <VariableSelector value={e.val} onChange={(v: string) => updateEntry(idx, e.key, v)} availableNodes={availableNodes} placeholder="Value" />
+          </div>
+          <Button variant="ghost" size="sm" className="h-8 w-8 p-0 text-red-500" onClick={() => removeEntry(idx)}><X className="h-4 w-4" /></Button>
+        </div>
+      ))}
+      <Button variant="outline" size="sm" onClick={addEntry} className="w-full text-xs h-7"><Plus className="h-3 w-3 mr-1" /> Add Filter</Button>
+    </div>
+  );
+};
+
 // ─── Node Config Editor ───────────────────────────────────────────────────────
-const NodeConfigFields = memo(function NodeConfigFields({ nodeType, config, onChange, dbSchema = [] }: {
+const NodeConfigFields = memo(function NodeConfigFields({ nodeType, config, onChange, dbSchema = [], availableNodes = [] }: {
   nodeType: string;
   config: Record<string, unknown>;
   onChange: (cfg: Record<string, unknown>) => void;
   dbSchema?: any[];
+  availableNodes?: any[];
 }) {
   const set = (key: string, value: unknown) => onChange({ ...config, [key]: value });
 
@@ -199,13 +444,13 @@ const NodeConfigFields = memo(function NodeConfigFields({ nodeType, config, onCh
         <>
           <div className="space-y-2">
             <Label>Prompt <span className="text-red-500">*</span></Label>
-            <Textarea value={(config.prompt as string) || ''} onChange={e => set('prompt', e.target.value)}
-              placeholder="Enter AI prompt. Use ${variable} for dynamic values." rows={4} />
+            <VariableSelectorTextarea value={(config.prompt as string) || ''} onChange={(v: string) => set('prompt', v)}
+              availableNodes={availableNodes} placeholder="Enter AI prompt. Use ${variable} for dynamic values." rows={4} />
           </div>
           <div className="space-y-2">
             <Label>System Prompt <span className="text-muted-foreground text-xs">(optional)</span></Label>
-            <Textarea value={(config.system_prompt as string) || ''} onChange={e => set('system_prompt', e.target.value)}
-              placeholder="Optional system/role instructions." rows={2} />
+            <VariableSelectorTextarea value={(config.system_prompt as string) || ''} onChange={(v: string) => set('system_prompt', v)}
+              availableNodes={availableNodes} placeholder="Optional system/role instructions." rows={2} />
           </div>
         </>
       );
@@ -245,8 +490,7 @@ const NodeConfigFields = memo(function NodeConfigFields({ nodeType, config, onCh
         <>
           <div className="space-y-2">
             <Label>Webhook URL <span className="text-red-500">*</span></Label>
-            <Input value={(config.url as string) || ''} onChange={e => set('url', e.target.value)}
-              placeholder="https://hooks.example.com/webhook" />
+            <VariableSelector value={config.url as string} onChange={(v: string) => set('url', v)} availableNodes={availableNodes} placeholder="https://hooks.example.com/webhook" />
           </div>
           <div className="space-y-2">
             <Label>Payload <span className="text-muted-foreground text-xs">(JSON, optional)</span></Label>
@@ -256,19 +500,105 @@ const NodeConfigFields = memo(function NodeConfigFields({ nodeType, config, onCh
           </div>
         </>
       );
-    case 'condition':
+    case 'condition': {
+      const mode = (config.mode as string) || 'easy';
+      const logicalOp = (config.logicalOperator as string) || 'AND';
+      const conditions = Array.isArray(config.conditions) ? config.conditions : [{ left: '', operator: 'eq', right: '' }];
+      
       return (
-        <>
-          <div className="space-y-2">
-            <Label>Condition Expression <span className="text-red-500">*</span></Label>
-            <Input value={(config.condition as string) || ''} onChange={e => set('condition', e.target.value)}
-              placeholder="e.g. ${status} == active" />
+        <div className="space-y-4">
+          <div className="flex items-center justify-between">
+            <Label>Configuration Mode</Label>
+            <Select value={mode} onValueChange={v => set('mode', v)}>
+              <SelectTrigger className="w-[140px] h-8 text-xs"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="easy">Easy Mode</SelectItem>
+                <SelectItem value="advanced">Advanced (Raw)</SelectItem>
+              </SelectContent>
+            </Select>
           </div>
-          <p className="text-xs text-muted-foreground p-2 bg-muted rounded">
-            Operators: ==, !=, &gt;, &lt;, &gt;=, &lt;=, contains, has_varName
-          </p>
-        </>
+          
+          {mode === 'easy' ? (
+            <div className="space-y-3 p-3 bg-muted/20 border border-border/50 rounded-lg">
+              <div className="flex justify-between items-center pb-2 border-b border-border/50">
+                <Label className="text-xs font-semibold">Match Conditions</Label>
+                <Select value={logicalOp} onValueChange={v => set('logicalOperator', v)}>
+                  <SelectTrigger className="w-[110px] h-7 text-xs"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="AND">ALL (AND)</SelectItem>
+                    <SelectItem value="OR">ANY (OR)</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              
+              <div className="space-y-2">
+                {conditions.map((c, i) => (
+                  <div key={i} className="flex flex-col gap-2 p-2 bg-background border border-border/50 rounded-md relative group">
+                    <Button variant="ghost" size="icon" className="h-5 w-5 absolute -top-2 -right-2 bg-destructive/10 text-destructive rounded-full opacity-0 group-hover:opacity-100 transition-opacity"
+                      onClick={() => {
+                        const arr = [...conditions];
+                        arr.splice(i, 1);
+                        set('conditions', arr);
+                      }}>
+                      <X className="h-3 w-3" />
+                    </Button>
+                    
+                    <VariableSelector value={c.left || ''} onChange={(v: string) => {
+                      const arr = [...conditions]; arr[i].left = v; set('conditions', arr);
+                    }} availableNodes={availableNodes} placeholder="Select data..." />
+                    
+                    <Select value={c.operator || 'eq'} onValueChange={(v: string) => {
+                      const arr = [...conditions]; arr[i].operator = v; set('conditions', arr);
+                    }}>
+                      <SelectTrigger className="h-8"><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="eq">Equals</SelectItem>
+                        <SelectItem value="neq">Does not equal</SelectItem>
+                        <SelectItem value="gt">Greater than</SelectItem>
+                        <SelectItem value="gte">Greater than or equal</SelectItem>
+                        <SelectItem value="lt">Less than</SelectItem>
+                        <SelectItem value="lte">Less than or equal</SelectItem>
+                        <SelectItem value="contains">Contains</SelectItem>
+                        <SelectItem value="not_contains">Does not contain</SelectItem>
+                        <SelectItem value="starts_with">Starts with</SelectItem>
+                        <SelectItem value="ends_with">Ends with</SelectItem>
+                        <SelectItem value="is_empty">Is empty</SelectItem>
+                        <SelectItem value="not_empty">Is not empty</SelectItem>
+                        <SelectItem value="is_true">Is true</SelectItem>
+                        <SelectItem value="is_false">Is false</SelectItem>
+                      </SelectContent>
+                    </Select>
+                    
+                    {!['is_empty', 'not_empty', 'is_true', 'is_false'].includes(c.operator) && (
+                      <VariableSelector value={c.right || ''} onChange={(v: string) => {
+                        const arr = [...conditions]; arr[i].right = v; set('conditions', arr);
+                      }} availableNodes={availableNodes} placeholder="Compare value..." />
+                    )}
+                  </div>
+                ))}
+              </div>
+              
+              <Button variant="outline" size="sm" className="w-full text-xs h-7 mt-2" onClick={() => {
+                set('conditions', [...conditions, { left: '', operator: 'eq', right: '' }]);
+              }}>
+                <Plus className="h-3 w-3 mr-1" /> Add Condition
+              </Button>
+            </div>
+          ) : (
+            <>
+              <div className="space-y-2 mt-4">
+                <Label>Condition Expression <span className="text-red-500">*</span></Label>
+                <VariableSelector value={(config.condition as string) || ''} onChange={(v: string) => set('condition', v)}
+                  availableNodes={availableNodes} placeholder="e.g. ${status} == active" />
+              </div>
+              <p className="text-xs text-muted-foreground p-2 bg-muted rounded mt-2">
+                Raw expression string (fallback for legacy advanced configs)
+              </p>
+            </>
+          )}
+        </div>
       );
+    }
     case 'delay':
       return (
         <div className="space-y-2">
@@ -313,10 +643,11 @@ const NodeConfigFields = memo(function NodeConfigFields({ nodeType, config, onCh
                 <Input value={(config.columns as string) || '*'} onChange={e => set('columns', e.target.value)} placeholder="*, id, name, status" />
               </div>
               <div className="space-y-2">
-                <Label>Filters <span className="text-muted-foreground text-xs">(JSON)</span></Label>
-                <Textarea value={typeof config.filters === 'object' ? JSON.stringify(config.filters, null, 2) : (config.filters as string) || '{}'}
-                  onChange={e => { try { set('filters', JSON.parse(e.target.value)); } catch { set('filters', e.target.value); } }}
-                  rows={2} />
+                <div className="flex justify-between items-center">
+                  <Label>Filters</Label>
+                  <span className="text-muted-foreground text-xs">(Visual Builder)</span>
+                </div>
+                <DatabaseEasyMode filters={config.filters} onChange={(v: string) => { try { set('filters', JSON.parse(v)); } catch { set('filters', v); } }} availableNodes={availableNodes} />
               </div>
               <div className="space-y-2">
                 <Label>Limit</Label>
@@ -334,10 +665,11 @@ const NodeConfigFields = memo(function NodeConfigFields({ nodeType, config, onCh
           )}
           {(config.operation === 'update' || config.operation === 'delete') && (
             <div className="space-y-2">
-              <Label>Filters <span className="text-red-500">*</span> <span className="text-muted-foreground text-xs">(JSON)</span></Label>
-              <Textarea value={typeof config.filters === 'object' ? JSON.stringify(config.filters, null, 2) : (config.filters as string) || '{}'}
-                onChange={e => { try { set('filters', JSON.parse(e.target.value)); } catch { set('filters', e.target.value); } }}
-                rows={2} />
+              <div className="flex justify-between items-center">
+                <Label>Filters <span className="text-red-500">*</span></Label>
+                <span className="text-muted-foreground text-xs">(Visual Builder)</span>
+              </div>
+              <DatabaseEasyMode filters={config.filters} onChange={(v: string) => { try { set('filters', JSON.parse(v)); } catch { set('filters', v); } }} availableNodes={availableNodes} />
             </div>
           )}
           {config.operation === 'update' && (
@@ -355,16 +687,16 @@ const NodeConfigFields = memo(function NodeConfigFields({ nodeType, config, onCh
         <>
           <div className="space-y-2">
             <Label>To <span className="text-red-500">*</span></Label>
-            <Input value={(config.to as string) || ''} onChange={e => set('to', e.target.value)} placeholder="recipient@example.com" />
+            <VariableSelector value={config.to as string} onChange={(v: string) => set('to', v)} availableNodes={availableNodes} placeholder="recipient@example.com" />
           </div>
           <div className="space-y-2">
             <Label>Subject</Label>
-            <Input value={(config.subject as string) || ''} onChange={e => set('subject', e.target.value)} placeholder="Subject line" />
+            <VariableSelector value={config.subject as string} onChange={(v: string) => set('subject', v)} availableNodes={availableNodes} placeholder="Subject line" />
           </div>
           <div className="space-y-2">
             <Label>Body</Label>
-            <Textarea value={(config.body as string) || ''} onChange={e => set('body', e.target.value)}
-              placeholder="Email body. Use ${variable} for dynamic values." rows={4} />
+            <VariableSelectorTextarea value={(config.body as string) || ''} onChange={(v: string) => set('body', v)}
+              availableNodes={availableNodes} placeholder="Email body. Use ${variable} for dynamic values." rows={4} />
           </div>
           <p className="text-xs text-amber-600 bg-amber-500/10 p-2 rounded">
             ⚠ Requires server-side SMTP integration. This node logs the email.
@@ -380,7 +712,8 @@ const NodeConfigFields = memo(function NodeConfigFields({ nodeType, config, onCh
           </div>
           <div className="space-y-2">
             <Label>Message</Label>
-            <Textarea value={(config.message as string) || ''} onChange={e => set('message', e.target.value)} rows={2} />
+            <VariableSelectorTextarea value={(config.message as string) || ''} onChange={(v: string) => set('message', v)}
+              availableNodes={availableNodes} rows={2} />
           </div>
         </>
       );
@@ -388,12 +721,14 @@ const NodeConfigFields = memo(function NodeConfigFields({ nodeType, config, onCh
       return (
         <>
           <div className="space-y-2">
-            <Label>Iterations</Label>
-            <Input type="number" min={1} max={100} value={(config.iterations as number) || 1} onChange={e => set('iterations', Number(e.target.value))} />
+            <Label>Input Array Data <span className="text-red-500">*</span></Label>
+            <VariableSelector value={(config.items as string) || ''} onChange={(v: string) => set('items', v)} 
+              availableNodes={availableNodes} placeholder="${node_1.data}" />
+            <p className="text-xs text-muted-foreground mt-1">Select an array to iterate over.</p>
           </div>
           <div className="space-y-2">
-            <Label>Items context key <span className="text-muted-foreground text-xs">(optional)</span></Label>
-            <Input value={(config.items as string) || ''} onChange={e => set('items', e.target.value)} placeholder="e.g. db_rows" />
+            <Label>Max Iterations <span className="text-muted-foreground text-xs">(Safety limit)</span></Label>
+            <Input type="number" min={1} max={1000} value={(config.iterations as number) || 100} onChange={e => set('iterations', Number(e.target.value))} />
           </div>
         </>
       );
@@ -443,6 +778,7 @@ export function WorkflowBuilderPage() {
   const { id } = useParams();
   const navigate = useNavigate();
   const location = useLocation();
+  const [searchParams] = useSearchParams();
   const { toast } = useToast();
 
   // Canvas state
@@ -491,8 +827,28 @@ export function WorkflowBuilderPage() {
   const [nodeStatuses, setNodeStatuses] = useState<Record<string, NodeStatus>>({});
   const [executionId, setExecutionId] = useState<string | null>(null);
   const [executionStatus, setExecutionStatus] = useState<string>('');
+  const [lastCompletedExecution, setLastCompletedExecution] = useState<Execution | null>(null);
+  const [showOutputViewer, setShowOutputViewer] = useState(false);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [currentStepName, setCurrentStepName] = useState('');
+
+  // UI State
+  const [isPaletteCollapsed, setIsPaletteCollapsed] = useState(() => {
+    return localStorage.getItem('builderPaletteCollapsed') === 'true';
+  });
+
+  const togglePalette = () => {
+    setIsPaletteCollapsed(prev => {
+      const next = !prev;
+      localStorage.setItem('builderPaletteCollapsed', String(next));
+      return next;
+    });
+  };
+  
+  // Test State
+  const [testOutputs, setTestOutputs] = useState<Record<string, any>>({});
+  const [isTestingNode, setIsTestingNode] = useState(false);
+  
   const elapsedRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const autosaveRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const savedNodesRef = useRef<string>('');
@@ -518,6 +874,19 @@ export function WorkflowBuilderPage() {
       setIsDirty(true); // they need to save it to persist
     }
   }, [id]);
+
+  // ── Handle ?doctor=executionId deep-link (from ExecutionsPage) ─────────────
+  useEffect(() => {
+    const doctorExecId = searchParams.get('doctor');
+    if (!doctorExecId) return;
+    // Fetch the failed execution and open the doctor panel
+    getExecution(doctorExecId).then(exec => {
+      if (exec) {
+        setDoctorExecution(exec as any);
+        setShowDoctorPanel(true);
+      }
+    }).catch(console.error);
+  }, [searchParams]);
 
   const loadWorkflow = async (wfId: string) => {
     console.log('[loadWorkflow] Starting load for ID:', wfId);
@@ -630,7 +999,16 @@ export function WorkflowBuilderPage() {
       try {
         const content = event.target?.result as string;
         const data = JSON.parse(content);
-        if (data.nodes && data.edges) {
+        
+        if (data.nodes && Array.isArray(data.nodes) && data.edges && Array.isArray(data.edges)) {
+          // Canonical Schema Validation
+          const validNodeTypes = new Set(['ai_prompt', 'api_call', 'database', 'condition', 'decision', 'delay', 'email', 'webhook', 'notification', 'loop']);
+          const invalidNodes = data.nodes.filter((n: any) => n.data && n.data.node_type && !validNodeTypes.has(n.data.node_type));
+          
+          if (invalidNodes.length > 0) {
+            throw new Error(`Invalid node types in file: ${invalidNodes.map((n: any) => n.data.node_type).join(', ')}`);
+          }
+
           setName(data.name || 'Imported Workflow');
           setDescription(data.description || '');
           setWorkflowTags(data.tags || []);
@@ -640,10 +1018,10 @@ export function WorkflowBuilderPage() {
           setIsDirty(true);
           toast({ title: 'Workflow imported successfully' });
         } else {
-          throw new Error('Invalid format');
+          throw new Error('Invalid format: missing nodes or edges arrays');
         }
-      } catch (err) {
-        toast({ title: 'Failed to import', description: 'Invalid workflow file', variant: 'destructive' });
+      } catch (err: any) {
+        toast({ title: 'Failed to import', description: err.message || 'Invalid workflow file', variant: 'destructive' });
       }
     };
     reader.readAsText(file);
@@ -756,6 +1134,56 @@ export function WorkflowBuilderPage() {
     setIsOptimizing(false);
   };
 
+  // ── AI Workflow Doctor ────────────────────────────────────────────────────
+  const [showDoctorPanel, setShowDoctorPanel] = useState(false);
+  const [doctorExecution, setDoctorExecution] = useState<import('@/types').Execution | null>(null);
+
+  const handleDoctorApplyFix = (patchedNodes: import('reactflow').Node[]) => {
+    setNodes(patchedNodes.map(n => ({ ...n, type: 'custom' })));
+    setIsDirty(true);
+    toast({ title: '🩺 Fix applied — review and run again when ready.' });
+  };
+
+  const handleDoctorRunAgain = () => {
+    proceedWithExecution();
+  };
+
+  const [isFixingWithAI, setIsFixingWithAI] = useState(false);
+  const handleFixWithAI = async () => {
+    setIsFixingWithAI(true);
+    try {
+      const { data, error } = await supabase.functions.invoke('gemini-api', {
+        body: {
+          action: 'fix_workflow',
+          payload: {
+            workflow: { nodes, edges },
+            errors: validationErrors
+          }
+        }
+      });
+      if (error) throw error;
+
+      if (data && data.text) {
+        const jsonMatch = data.text.match(/\{[\s\S]*\}/);
+        if (jsonMatch) {
+          const fixed = JSON.parse(jsonMatch[0]);
+          if (fixed.nodes && fixed.edges) {
+            setNodes(fixed.nodes);
+            setEdges(fixed.edges);
+            setIsDirty(true);
+            toast({ title: '✨ AI applied fixes to your workflow!' });
+            return;
+          }
+        }
+      }
+      throw new Error('AI failed to produce a valid fix format.');
+    } catch (err: any) {
+      toast({ title: 'AI Repair Failed', description: err.message, variant: 'destructive' });
+    } finally {
+      setIsFixingWithAI(false);
+    }
+  };
+
   // ── Autosave every 30s if dirty and saved before ──────────────────────────
   useEffect(() => {
     autosaveRef.current = setInterval(() => {
@@ -806,7 +1234,9 @@ export function WorkflowBuilderPage() {
           for (const log of newLogs) {
             const runMatch = log.message.match(/Running node: (.+?) \(/);
             const doneMatch = log.message.match(/✓ (.+?) completed/);
-            const failMatch = log.message.match(/✗ (.+?) failed/);
+            const failContinueMatch = log.message.match(/✗ (.+?) failed but continueOnFail/);
+            const failMatch = !failContinueMatch ? log.message.match(/✗ (.+?) failed/) : null;
+            const skipMatch = log.message.match(/Skipping node: (.+?) \(/);
             
             if (runMatch) { 
               nodeUpdatesByLabel[runMatch[1]] = { status: 'running' }; 
@@ -814,7 +1244,9 @@ export function WorkflowBuilderPage() {
               setCurrentStepName(runMatch[1]);
             }
             else if (doneMatch) { nodeUpdatesByLabel[doneMatch[1]] = { status: 'success' }; updatedNodes = true; }
+            else if (failContinueMatch) { nodeUpdatesByLabel[failContinueMatch[1]] = { status: 'warning', errorData: log.metadata?.issue || log.metadata }; updatedNodes = true; }
             else if (failMatch) { nodeUpdatesByLabel[failMatch[1]] = { status: 'error', errorData: log.metadata?.issue || log.metadata }; updatedNodes = true; }
+            else if (skipMatch) { nodeUpdatesByLabel[skipMatch[1]] = { status: 'skipped' }; updatedNodes = true; }
           }
           
           if (updatedNodes) {
@@ -860,13 +1292,23 @@ export function WorkflowBuilderPage() {
           // Reset all transient running edges and nodes (except failed nodes which remain red)
           setCurrentStepName('');
           setEdges(eds => eds.map(e => ({ ...e, animated: false, style: {} })));
+          
+          const finalVars = (exec.result?.variables as Record<string, any>) || {};
+          
           setNodes(nds => nds.map(n => {
-            if (n.data._status === 'running') {
-              return { ...n, data: { ...n.data, _status: 'idle' } };
+            const nextData = { ...n.data };
+            if (nextData._status === 'running' || nextData._status === 'waiting') {
+              nextData._status = 'idle';
             }
-            return n;
+            // Attach execution output for Inspector Panel
+            const nodeOutput = finalVars[`node_${n.id}`];
+            if (nodeOutput !== undefined) {
+               nextData._lastOutput = nodeOutput;
+            }
+            return { ...n, data: nextData };
           }));          
           if (exec.status === 'completed') {
+            setLastCompletedExecution(exec);
             toast({ title: '✓ Workflow completed successfully!' });
             // Success Confetti!
             confetti({
@@ -876,6 +1318,7 @@ export function WorkflowBuilderPage() {
               colors: ['#8b5cf6', '#3b82f6', '#10b981', '#f59e0b']
             });
           } else if (exec.status === 'failed') {
+            setLastCompletedExecution(exec);
             let errorMsg = exec.error_message || undefined;
             try {
               if (errorMsg) {
@@ -886,6 +1329,9 @@ export function WorkflowBuilderPage() {
               // Ignore
             }
             toast({ title: '❌ Workflow execution failed', description: errorMsg, variant: 'destructive' });
+            // Auto-open the AI Workflow Doctor
+            setDoctorExecution(exec);
+            setShowDoctorPanel(true);
           }
         }
       } catch (err) {
@@ -1023,8 +1469,8 @@ export function WorkflowBuilderPage() {
     }
     setExecuting(true);
     setNodeStatuses({});
-    // Reset all node statuses
-    setNodes(nds => nds.map(n => ({ ...n, data: { ...n.data, _status: 'idle' as NodeStatus } })));
+    // Reset all node statuses to waiting
+    setNodes(nds => nds.map(n => ({ ...n, data: { ...n.data, _status: 'waiting' as NodeStatus, _lastOutput: undefined, _errorData: undefined } })));
     try {
       const workflow = await getWorkflow(workflowId);
       if (!workflow) throw new Error('Workflow not found');
@@ -1070,6 +1516,95 @@ export function WorkflowBuilderPage() {
     proceedWithExecution();
   };
 
+  const handleTestNode = async (targetNodeId: string, runUpstream = false) => {
+    const targetNode = nodes.find(n => n.id === targetNodeId);
+    if (!targetNode) return;
+
+    setIsTestingNode(true);
+    const ctx = { ...testOutputs };
+    
+    // Determine nodes to run
+    let nodesToRun = [targetNode];
+    if (runUpstream) {
+      // Find all upstream nodes
+      const upstreamIds = new Set<string>();
+      const queue = [targetNode.id];
+      while (queue.length > 0) {
+        const curr = queue.shift()!;
+        const parents = edges.filter(e => e.target === curr).map(e => e.source);
+        for (const p of parents) {
+          if (!upstreamIds.has(p)) {
+            upstreamIds.add(p);
+            queue.push(p);
+          }
+        }
+      }
+      const upstreamNodes = nodes.filter(n => upstreamIds.has(n.id)) as unknown as import('@/types').WorkflowNode[];
+      const sortedUpstream = topologicalSort(upstreamNodes, edges.filter(e => upstreamIds.has(e.source) && upstreamIds.has(e.target)) as unknown as import('@/types').WorkflowEdge[]);
+      nodesToRun = [...sortedUpstream, targetNode];
+    }
+
+    // Clear statuses for nodes about to run
+    setNodes(nds => nds.map(n => 
+      nodesToRun.some(runNode => runNode.id === n.id) 
+        ? { ...n, data: { ...n.data, _status: 'waiting' as NodeStatus, _lastOutput: undefined, _errorData: undefined, _duration: undefined } }
+        : n
+    ));
+    
+    const logs: any[] = [];
+    const pushLog = async (level: string, message: string, metadata?: any) => {
+      logs.push({ level, message, metadata });
+    };
+
+    let failed = false;
+    
+    for (let i = 0; i < nodesToRun.length; i++) {
+      if (failed) break;
+      const n = nodesToRun[i];
+      const wfNode = n as unknown as import('@/types').WorkflowNode;
+      const wfEdges = edges as unknown as import('@/types').WorkflowEdge[];
+      const nType = resolveNodeType(wfNode);
+      const nConfig = buildNodeConfig(wfNode, wfEdges, ctx);
+      
+      setNodes(nds => nds.map(nd => nd.id === n.id ? { ...nd, data: { ...nd.data, _status: 'running' as NodeStatus } } : nd));
+      
+      const startTime = performance.now();
+      
+      try {
+        const wfNode = n as unknown as import('@/types').WorkflowNode;
+        const wfNodes = nodes as unknown as import('@/types').WorkflowNode[];
+        const result = await executeNode(nType, nConfig, ctx, pushLog, wfNode, wfNodes, wfEdges);
+        const duration = Math.round(performance.now() - startTime);
+        
+        ctx[`node_${n.id}`] = result;
+        
+        setTestOutputs(prev => ({ ...prev, [`node_${n.id}`]: result }));
+        setNodes(nds => nds.map(nd => nd.id === n.id ? { ...nd, data: { ...nd.data, _status: 'success' as NodeStatus, _duration: duration, _lastOutput: result } } : nd));
+      } catch (err: any) {
+        const duration = Math.round(performance.now() - startTime);
+        const wfNode = n as unknown as import('@/types').WorkflowNode;
+        const issue = buildExecutionIssue(wfNode, nType, String(err.message || err), ctx);
+        const continueOnFail = !!nConfig.continueOnFail;
+        
+        setNodes(nds => nds.map(nd => nd.id === n.id ? { 
+          ...nd, 
+          data: { 
+            ...nd.data, 
+            _status: (continueOnFail ? 'warning' : 'error') as NodeStatus, 
+            _duration: duration, 
+            _errorData: issue 
+          } 
+        } : nd));
+        
+        if (!continueOnFail) {
+          failed = true;
+        }
+      }
+    }
+    
+    setIsTestingNode(false);
+  };
+
   // ── Delete selected nodes ─────────────────────────────────────────────────
   const deleteSelectedNodes = () => {
     const selectedIds = new Set(nodes.filter(n => n.selected).map(n => n.id));
@@ -1094,12 +1629,13 @@ export function WorkflowBuilderPage() {
   const handleDuplicate = async () => {
     if (!user?.id) return;
     try {
+      const { nodes: remappedNodes, edges: remappedEdges } = remapWorkflowIDs(nodes, edges);
       const copy = await createWorkflow({
         user_id: user.id, agent_id: null,
         name: `${name} (copy)`, description,
         prompt: null,
-        nodes: nodes.map(n => ({ id: n.id, type: 'custom', position: n.position, data: n.data })),
-        edges: edges.map(e => ({ id: e.id, source: e.source, target: e.target })),
+        nodes: remappedNodes.map(n => ({ id: n.id, type: 'custom', position: n.position, data: n.data })),
+        edges: remappedEdges.map(e => ({ id: e.id, source: e.source, target: e.target })),
         variables: {}, status: 'draft', is_template: false
       });
       toast({ title: 'Workflow duplicated', description: copy.name });
@@ -1204,57 +1740,20 @@ export function WorkflowBuilderPage() {
 
           {/* Action buttons */}
           <div className="flex items-center gap-2">
+            
+            {/* Primary Actions & Health */}
             <Tooltip>
               <TooltipTrigger asChild>
-                <Button size="sm" variant="outline" onClick={() => { setShowWorkflowList(true); }}>
-                  <List className="h-4 w-4 mr-1" />My Workflows
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent>View all your workflows</TooltipContent>
-            </Tooltip>
-
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button size="sm" variant={workflowStatus === 'active' ? 'default' : 'outline'} onClick={toggleStatus}>
-                  {workflowStatus === 'active' ? <ToggleRight className="h-4 w-4 mr-1" /> : <ToggleLeft className="h-4 w-4 mr-1" />}
-                  {workflowStatus === 'active' ? 'Active' : 'Inactive'}
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent>Toggle workflow active status</TooltipContent>
-            </Tooltip>
-
-            <input type="file" ref={importInputRef} accept=".json" onChange={handleImport} className="hidden" />
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button size="sm" variant="outline" onClick={() => importInputRef.current?.click()}>
-                  <Upload className="h-4 w-4" />
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent>Import workflow (JSON)</TooltipContent>
-            </Tooltip>
-
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button size="sm" variant="outline" onClick={handleExport} disabled={!workflowId && !isDirty}>
-                  <FileJson className="h-4 w-4" />
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent>Export workflow (JSON)</TooltipContent>
-            </Tooltip>
-
-            {/* Validation & Optimize */}
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button size="sm" variant="outline" className={`gap-1 ${healthScore === 100 ? 'text-green-500' : healthScore > 60 ? 'text-yellow-500' : 'text-red-500'}`}>
-                   {healthScore === 100 ? <CheckCircle className="h-4 w-4" /> : <AlertCircle className="h-4 w-4" />}
-                   {healthScore}%
+                <Button size="sm" variant="outline" className={`gap-1 ${validationErrors.length > 0 ? 'text-red-500 border-red-500/30' : healthScore < 100 ? 'text-yellow-500 border-yellow-500/30' : 'text-green-500 border-green-500/30'}`}>
+                   {validationErrors.length > 0 ? <AlertCircle className="h-4 w-4" /> : healthScore < 100 ? <AlertTriangle className="h-4 w-4" /> : <CheckCircle className="h-4 w-4" />}
+                   {validationErrors.length > 0 ? 'INVALID' : healthScore < 100 ? 'HAS WARNINGS' : 'READY'}
                 </Button>
               </TooltipTrigger>
               <TooltipContent>
-                <div className="text-sm">
-                  <p className="font-semibold mb-1">Health Score</p>
+                <div className="text-sm max-w-xs">
+                  <p className="font-semibold mb-1">Workflow Health</p>
                   {validationErrors.length === 0 ? 'All nodes configured properly.' : (
-                    <ul className="list-disc pl-4 text-xs text-red-300">
+                    <ul className="list-disc pl-4 text-xs text-red-300 space-y-1">
                       {validationErrors.map((err, i) => <li key={i}>{err.nodeName}: {err.message}</li>)}
                     </ul>
                   )}
@@ -1262,38 +1761,90 @@ export function WorkflowBuilderPage() {
               </TooltipContent>
             </Tooltip>
 
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button size="sm" variant="outline" onClick={handleOptimizeWorkflow} disabled={isOptimizing}>
-                  {isOptimizing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4 text-purple-500" />}
-                  <span className="ml-1 hidden md:inline">Optimize</span>
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent>AI Auto-layout & Validation</TooltipContent>
-            </Tooltip>
+            {validationErrors.length > 0 && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button size="sm" variant="outline" onClick={handleFixWithAI} disabled={isFixingWithAI} className="gap-1 border-purple-500/30 text-purple-500 hover:bg-purple-500/10 hover:text-purple-400">
+                    {isFixingWithAI ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wand2 className="h-4 w-4" />}
+                    <span className="hidden md:inline">Fix with AI</span>
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>Auto-repair workflow configuration using AI</TooltipContent>
+              </Tooltip>
+            )}
 
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button size="sm" variant="outline" onClick={handleDuplicate} disabled={!workflowId}>
-                  <Copy className="h-4 w-4" />
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent>Duplicate workflow</TooltipContent>
-            </Tooltip>
-
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button size="sm" variant="outline" className="text-red-500 hover:text-red-600" onClick={() => setShowDeleteConfirm(true)} disabled={!workflowId}>
-                  <Trash2 className="h-4 w-4" />
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent>Delete workflow</TooltipContent>
-            </Tooltip>
+            {doctorExecution && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => setShowDoctorPanel(true)}
+                    className="gap-1 border-violet-500/40 text-violet-500 hover:bg-violet-500/10 relative"
+                  >
+                    <span className="text-base leading-none">🩺</span>
+                    <span className="hidden md:inline">Diagnose</span>
+                    {!showDoctorPanel && (
+                      <span className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-red-500 rounded-full animate-pulse border border-background" />
+                    )}
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>Open AI Workflow Doctor to diagnose the last failure</TooltipContent>
+              </Tooltip>
+            )}
 
             <Button size="sm" variant="secondary" onClick={() => handleValidate()}>
               <CheckCircle className="h-4 w-4 mr-1" />
               Validate
             </Button>
+
+            {/* Secondary Actions (More) */}
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button size="sm" variant="outline" className="px-2">
+                  <MoreHorizontal className="h-4 w-4" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-56">
+                <DropdownMenuLabel>Workflow Actions</DropdownMenuLabel>
+                <DropdownMenuSeparator />
+                
+                <DropdownMenuItem onClick={() => setShowWorkflowList(true)}>
+                  <List className="h-4 w-4 mr-2" /> My Workflows
+                </DropdownMenuItem>
+                
+                <DropdownMenuItem onClick={toggleStatus}>
+                  {workflowStatus === 'active' ? <ToggleRight className="h-4 w-4 mr-2 text-green-500" /> : <ToggleLeft className="h-4 w-4 mr-2 text-muted-foreground" />}
+                  {workflowStatus === 'active' ? 'Mark as Inactive' : 'Mark as Active'}
+                </DropdownMenuItem>
+                
+                <DropdownMenuItem onClick={handleOptimizeWorkflow} disabled={isOptimizing}>
+                  {isOptimizing ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <Sparkles className="h-4 w-4 text-purple-500 mr-2" />}
+                  Optimize Layout
+                </DropdownMenuItem>
+
+                <DropdownMenuSeparator />
+                
+                <DropdownMenuItem onClick={() => importInputRef.current?.click()}>
+                  <Upload className="h-4 w-4 mr-2" /> Import JSON
+                </DropdownMenuItem>
+                <input type="file" ref={importInputRef} accept=".json" onChange={handleImport} className="hidden" />
+
+                <DropdownMenuItem onClick={handleExport} disabled={!workflowId && !isDirty}>
+                  <FileJson className="h-4 w-4 mr-2" /> Export JSON
+                </DropdownMenuItem>
+
+                <DropdownMenuItem onClick={handleDuplicate} disabled={!workflowId}>
+                  <Copy className="h-4 w-4 mr-2" /> Duplicate
+                </DropdownMenuItem>
+
+                <DropdownMenuSeparator />
+
+                <DropdownMenuItem onClick={() => setShowDeleteConfirm(true)} disabled={!workflowId} className="text-red-500 focus:text-red-600 focus:bg-red-500/10">
+                  <Trash2 className="h-4 w-4 mr-2" /> Delete Workflow
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
 
             <Button size="sm" onClick={handleSave} disabled={saving || !isDirty}>
               {saving ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : <Save className="h-4 w-4 mr-1" />}
@@ -1305,6 +1856,18 @@ export function WorkflowBuilderPage() {
                 ? <><Loader2 className="h-4 w-4 mr-1 animate-spin" />{formatElapsed(elapsedSeconds)}</>
                 : <><Play className="h-4 w-4 mr-1" />Run</>}
             </Button>
+
+            {lastCompletedExecution && !executing && (
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => setShowOutputViewer(true)}
+                className="gap-1.5 border-emerald-500/40 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/10 hover:border-emerald-500/60"
+              >
+                <Activity className="h-4 w-4" />
+                View Outputs
+              </Button>
+            )}
           </div>
         </div>
 
@@ -1337,23 +1900,38 @@ export function WorkflowBuilderPage() {
         {/* Main canvas area */}
         <div className="flex flex-1 overflow-hidden">
           {/* Node sidebar */}
-          <div className="w-56 glass-panel border-r-0 p-3 flex flex-col overflow-y-auto shrink-0 z-10 shadow-xl">
-            <h3 className="text-xs font-semibold text-muted-foreground uppercase mb-3">Add Nodes</h3>
+          <div className={`transition-all duration-300 glass-panel border-r-0 flex flex-col overflow-y-auto shrink-0 z-10 shadow-xl ${isPaletteCollapsed ? 'w-14 items-center px-1 py-3' : 'w-56 p-3'}`}>
+            <div className={`flex items-center mb-3 w-full ${isPaletteCollapsed ? 'justify-center' : 'justify-between px-1'}`}>
+              {!isPaletteCollapsed && <h3 className="text-xs font-semibold text-muted-foreground uppercase">Add Nodes</h3>}
+              <Button variant="ghost" size="icon" className="h-6 w-6 text-muted-foreground hover:text-foreground" onClick={togglePalette}>
+                {isPaletteCollapsed ? <PanelLeftOpen className="h-4 w-4" /> : <PanelLeftClose className="h-4 w-4" />}
+              </Button>
+            </div>
+            
             {NODE_CATEGORIES.map(category => (
-              <div key={category.name} className="mb-3">
-                <p className="text-xs text-muted-foreground uppercase mb-1">{category.name}</p>
-                <div className="space-y-0.5">
+              <div key={category.name} className="mb-3 w-full">
+                {!isPaletteCollapsed && <p className="text-[10px] font-semibold text-muted-foreground uppercase mb-1 px-1">{category.name}</p>}
+                <div className="space-y-1 w-full flex flex-col items-center">
                   {category.nodes.map(nodeInfo => (
-                    <button
-                      key={nodeInfo.type}
-                      className="w-full flex items-center gap-2 px-2 py-1.5 rounded hover:bg-muted transition-colors text-sm text-left"
-                      onClick={() => addNode(nodeInfo)}
-                    >
-                      <div className={`${nodeInfo.color} p-1 rounded`}>
-                        <nodeInfo.icon className="h-3 w-3 text-white" />
-                      </div>
-                      {nodeInfo.label}
-                    </button>
+                    <Tooltip key={nodeInfo.type} delayDuration={isPaletteCollapsed ? 0 : 500}>
+                      <TooltipTrigger asChild>
+                        <button
+                          className={`flex items-center rounded hover:bg-muted transition-colors ${isPaletteCollapsed ? 'w-10 h-10 justify-center' : 'w-full gap-2 px-2 py-1.5 text-sm text-left'}`}
+                          onClick={() => addNode(nodeInfo)}
+                        >
+                          <div className={`${nodeInfo.color} p-1.5 rounded shrink-0`}>
+                            <nodeInfo.icon className="h-4 w-4 text-white" />
+                          </div>
+                          {!isPaletteCollapsed && <span className="truncate">{nodeInfo.label}</span>}
+                        </button>
+                      </TooltipTrigger>
+                      {isPaletteCollapsed && (
+                        <TooltipContent side="right" sideOffset={10}>
+                          <p className="font-semibold">{nodeInfo.label}</p>
+                          <p className="text-xs opacity-80">{category.name}</p>
+                        </TooltipContent>
+                      )}
+                    </Tooltip>
                   ))}
                 </div>
               </div>
@@ -1384,8 +1962,8 @@ export function WorkflowBuilderPage() {
               className="bg-background"
             >
               <Background variant={BackgroundVariant.Dots} gap={12} size={1} />
-              <Controls />
-              <MiniMap />
+              <Controls position="top-left" className="m-4 shadow-sm border border-border/50" />
+              <MiniMap position="bottom-left" className="m-4 shadow-sm border border-border/50 rounded overflow-hidden" zoomable pannable />
               <Panel position="top-right" className="flex gap-2">
                 <Tooltip>
                   <TooltipTrigger asChild>
@@ -1453,8 +2031,31 @@ export function WorkflowBuilderPage() {
                     <NodeConfigFields
                       nodeType={selectedNodeType}
                       config={(selectedNode.data.config as Record<string, unknown>) || {}}
-                      onChange={updateNodeConfig}
+                      onChange={cfg => {
+                        const newCfg = { ...cfg };
+                        if (newCfg.needs_configuration) {
+                          delete newCfg.needs_configuration;
+                          delete newCfg.configuration_note;
+                        }
+                        updateNodeConfig(newCfg);
+                      }}
                       dbSchema={dbSchema}
+                      availableNodes={(() => {
+                        // Compute strictly upstream nodes via BFS/DFS
+                        const upstreamIds = new Set<string>();
+                        const queue = [selectedNode.id];
+                        while (queue.length > 0) {
+                          const curr = queue.shift()!;
+                          const parents = edges.filter(e => e.target === curr).map(e => e.source);
+                          for (const p of parents) {
+                            if (!upstreamIds.has(p)) {
+                              upstreamIds.add(p);
+                              queue.push(p);
+                            }
+                          }
+                        }
+                        return nodes.filter(n => upstreamIds.has(n.id));
+                      })()}
                     />
                     <Separator />
                     <div className="flex items-center space-x-2">
@@ -1472,6 +2073,109 @@ export function WorkflowBuilderPage() {
                     <p className="text-xs text-muted-foreground ml-6">
                       If enabled, execution will proceed even if this node fails.
                     </p>
+                    
+                    <Separator />
+                    
+                    {/* TEST & DEBUG SECTION */}
+                    <div className="space-y-3">
+                      <p className="text-xs font-semibold text-muted-foreground uppercase flex items-center gap-1">
+                        <Activity className="h-3 w-3" /> Test & Debug
+                      </p>
+                      
+                      <div className="flex gap-2">
+                        <Button 
+                          variant="secondary" 
+                          size="sm" 
+                          className="flex-1 text-xs h-8"
+                          disabled={isTestingNode}
+                          onClick={() => handleTestNode(selectedNode.id, false)}
+                        >
+                          {isTestingNode && selectedNode.data._status === 'running' ? <Loader2 className="h-3 w-3 animate-spin mr-1" /> : <Play className="h-3 w-3 mr-1" />}
+                          Test Step
+                        </Button>
+                        <Button 
+                          variant="outline" 
+                          size="sm" 
+                          className="flex-1 text-xs h-8"
+                          disabled={isTestingNode}
+                          onClick={() => handleTestNode(selectedNode.id, true)}
+                        >
+                          <History className="h-3 w-3 mr-1" />
+                          Run Previous
+                        </Button>
+                      </div>
+
+                      {/* Execution Inspector */}
+                      {(selectedNode.data._lastOutput !== undefined || selectedNode.data._errorData) && (
+                        <div className="space-y-2 bg-muted/20 p-3 rounded-lg border border-border">
+                          <div className="flex justify-between items-center">
+                            <span className="text-xs font-semibold text-muted-foreground uppercase flex items-center gap-1">
+                              <Database className="h-3 w-3" /> Inspector
+                            </span>
+                            {selectedNode.data._duration !== undefined && (
+                              <span className="text-[10px] text-muted-foreground">{selectedNode.data._duration}ms</span>
+                            )}
+                          </div>
+                          
+                          {selectedNode.data._errorData ? (
+                            <div className="text-xs text-red-500 bg-red-500/10 p-2 rounded border border-red-500/20">
+                              <p className="font-bold mb-1">Error</p>
+                              <p>{(selectedNode.data._errorData as any)?.message}</p>
+                            </div>
+                          ) : (
+                            <Tabs defaultValue="simple" className="w-full">
+                              <TabsList className="w-full h-7 mb-2">
+                                <TabsTrigger value="simple" className="text-[10px] flex-1">Simple</TabsTrigger>
+                                <TabsTrigger value="json" className="text-[10px] flex-1">JSON</TabsTrigger>
+                              </TabsList>
+                              <TabsContent value="simple" className="m-0">
+                                <ScrollArea className="max-h-60 rounded bg-background p-2 border border-border">
+                                  {typeof selectedNode.data._lastOutput === 'object' && selectedNode.data._lastOutput !== null ? (
+                                    Array.isArray(selectedNode.data._lastOutput) ? (
+                                      <div className="text-[10px] space-y-1">
+                                        <p className="text-muted-foreground">Array [{selectedNode.data._lastOutput.length} items]</p>
+                                        {selectedNode.data._lastOutput.slice(0, 3).map((item: any, i: number) => (
+                                          <div key={i} className="border-b border-border/50 pb-1 mb-1">
+                                            {typeof item === 'object' && item !== null ? 
+                                              Object.entries(item).map(([k, v]) => (
+                                                <div key={k} className="flex gap-2">
+                                                  <span className="font-semibold text-muted-foreground">{k}:</span>
+                                                  <span className="truncate">{String(v)}</span>
+                                                </div>
+                                              )) : String(item)
+                                            }
+                                          </div>
+                                        ))}
+                                        {selectedNode.data._lastOutput.length > 3 && <p className="text-muted-foreground italic">...and {selectedNode.data._lastOutput.length - 3} more</p>}
+                                      </div>
+                                    ) : (
+                                      <div className="text-[10px] space-y-1">
+                                        {Object.entries(selectedNode.data._lastOutput).map(([k, v]) => (
+                                          <div key={k} className="flex flex-col border-b border-border/50 pb-1 mb-1">
+                                            <span className="font-semibold text-muted-foreground">{k}</span>
+                                            <span className="break-all">{typeof v === 'object' ? JSON.stringify(v) : String(v)}</span>
+                                          </div>
+                                        ))}
+                                      </div>
+                                    )
+                                  ) : (
+                                    <div className="text-[10px] break-all">{String(selectedNode.data._lastOutput)}</div>
+                                  )}
+                                </ScrollArea>
+                              </TabsContent>
+                              <TabsContent value="json" className="m-0">
+                                <ScrollArea className="max-h-60 rounded bg-background p-2 border border-border">
+                                  <pre className="text-[10px] font-mono leading-relaxed">
+                                    {JSON.stringify(selectedNode.data._lastOutput, null, 2)}
+                                  </pre>
+                                </ScrollArea>
+                              </TabsContent>
+                            </Tabs>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                    
                     <Separator />
                     <Button variant="destructive" size="sm" className="w-full"
                       onClick={() => { deleteSelectedNodes(); }}>
@@ -1720,6 +2424,26 @@ export function WorkflowBuilderPage() {
           </DialogContent>
         </Dialog>
       </div>
+
+      {/* AI Workflow Doctor Panel */}
+      <WorkflowDoctorPanel
+        open={showDoctorPanel}
+        onClose={() => setShowDoctorPanel(false)}
+        execution={doctorExecution}
+        nodes={nodes as any}
+        edges={edges as any}
+        onApplyFix={handleDoctorApplyFix}
+        onRunAgain={handleDoctorRunAgain}
+      />
+
+      {/* Workflow Output Viewer */}
+      {showOutputViewer && lastCompletedExecution && (
+        <WorkflowOutputViewer
+          execution={lastCompletedExecution}
+          workflowName={name}
+          onClose={() => setShowOutputViewer(false)}
+        />
+      )}
     </TooltipProvider>
   );
 }

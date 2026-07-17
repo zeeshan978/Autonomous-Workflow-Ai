@@ -141,9 +141,9 @@ export function AdminPage() {
   return (
     <div className="space-y-6">
       <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="space-y-6">
-        <div className="flex items-center justify-between">
+        <div className="mb-8 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
           <div>
-            <h1 className="text-3xl font-bold flex items-center gap-2">
+            <h1 className="text-3xl font-bold tracking-tight mb-1 flex items-center gap-2">
               <Shield className="h-8 w-8 text-primary" />
               Admin Panel
             </h1>
@@ -161,13 +161,15 @@ export function AdminPage() {
             { icon: UserCheck, label: 'Managers', value: stats.managers, color: 'text-amber-500' },
             { icon: Users, label: 'Employees', value: stats.employees, color: 'text-cyan-500' }
           ].map((stat) => (
-            <Card key={stat.label}>
-              <CardContent className="p-4">
-                <div className="flex items-center gap-2">
-                  <stat.icon className={`h-5 w-5 ${stat.color}`} />
+            <Card key={stat.label} className="glass-card hover:border-primary/50 transition-premium">
+              <CardContent className="p-5 flex flex-col justify-between h-full gap-2">
+                <div className="flex items-center gap-3">
+                  <div className={`p-2 rounded-lg bg-muted/50 ${stat.color.replace('text', 'bg').replace('500', '500/10')}`}>
+                    <stat.icon className={`h-5 w-5 ${stat.color}`} />
+                  </div>
                   <div>
-                    <p className="text-xl font-bold">{stat.value}</p>
-                    <p className="text-xs text-muted-foreground">{stat.label}</p>
+                    <p className="text-2xl font-bold">{stat.value}</p>
+                    <p className="text-sm font-medium text-muted-foreground">{stat.label}</p>
                   </div>
                 </div>
               </CardContent>

@@ -91,10 +91,10 @@ export function SchedulerPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex justify-between items-center">
+      <div className="mb-8 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
         <div>
-          <h1 className="text-3xl font-bold tracking-tight">Scheduler</h1>
-          <p className="text-muted-foreground mt-2">Automate your workflows on a recurring schedule</p>
+          <h1 className="text-3xl font-bold tracking-tight mb-1">Scheduler</h1>
+          <p className="text-muted-foreground">Automate your workflows on a recurring schedule</p>
         </div>
         
         <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
@@ -189,8 +189,8 @@ export function SchedulerPage() {
               animate={{ opacity: 1, y: 0 }}
               transition={{ delay: i * 0.1 }}
             >
-              <Card className="group overflow-hidden relative">
-                <CardHeader className="pb-3">
+              <Card className="glass-card hover:border-primary/50 transition-premium h-full flex flex-col">
+                <CardHeader className="p-5 border-b border-border/50 pb-4">
                   <div className="flex justify-between items-start">
                     <div>
                       <CardTitle className="text-lg line-clamp-1">{schedule.name}</CardTitle>
@@ -198,12 +198,12 @@ export function SchedulerPage() {
                         Workflow: {(schedule as any).workflows?.name || 'Unknown'}
                       </CardDescription>
                     </div>
-                    <Badge variant={schedule.status === 'active' ? 'default' : 'secondary'}>
+                    <Badge variant={schedule.status === 'active' ? 'default' : 'secondary'} className={schedule.status === 'active' ? 'bg-green-500/10 text-green-500 border-green-500/30' : ''}>
                       {schedule.status}
                     </Badge>
                   </div>
                 </CardHeader>
-                <CardContent>
+                <CardContent className="p-5 flex-1 flex flex-col justify-between">
                   <div className="space-y-4 text-sm text-muted-foreground">
                     <div className="flex items-center gap-2">
                       <Clock className="h-4 w-4" />

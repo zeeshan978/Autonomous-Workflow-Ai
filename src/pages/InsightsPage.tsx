@@ -75,10 +75,10 @@ export function InsightsPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex justify-between items-center">
+      <div className="mb-8 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
         <div>
-          <h1 className="text-3xl font-bold tracking-tight">Workflow Insights</h1>
-          <p className="text-muted-foreground mt-2">Live analytics and performance metrics for your automations</p>
+          <h1 className="text-3xl font-bold tracking-tight mb-1">Workflow Insights</h1>
+          <p className="text-muted-foreground">Live analytics and performance metrics for your automations</p>
         </div>
         <div className="flex gap-2">
           <Button variant="outline" className="gap-2">

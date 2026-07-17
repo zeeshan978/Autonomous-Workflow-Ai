@@ -18,6 +18,39 @@ export const ALLOWED_TABLES = [
   'api_keys', 'audit_logs', 'schedules'
 ];
 
+/**
+ * Utility to redact sensitive information from objects before saving to execution reports.
+ */
+export function redactSensitiveData(data: any): any {
+  if (data === null || data === undefined) return data;
+  
+  if (typeof data === 'string') {
+    return data;
+  }
+  
+  if (Array.isArray(data)) {
+    return data.map(item => redactSensitiveData(item));
+  }
+  
+  if (typeof data === 'object') {
+    const sensitiveKeys = ['authorization', 'api_key', 'apikey', 'secret', 'password', 'token', 'access_token', 'client_secret', 'bearer'];
+    const redacted: any = {};
+    for (const key in data) {
+      if (Object.prototype.hasOwnProperty.call(data, key)) {
+        const lowerKey = key.toLowerCase();
+        if (sensitiveKeys.some(sk => lowerKey.includes(sk))) {
+          redacted[key] = '[REDACTED]';
+        } else {
+          redacted[key] = redactSensitiveData(data[key]);
+        }
+      }
+    }
+    return redacted;
+  }
+  
+  return data;
+}
+
 export interface ExecutionContext {
   workflowId: string;
   executionId: string;
@@ -33,6 +66,7 @@ export interface ExecutionIssue {
   nodeType: string;
   field?: string;
   severity: 'error' | 'warning';
+  category?: 'CONFIGURATION ERROR' | 'VALIDATION ERROR' | 'RUNTIME ERROR' | 'NETWORK ERROR' | 'AUTHENTICATION ERROR' | 'PERMISSION ERROR' | 'RATE LIMIT ERROR' | 'TIMEOUT' | 'EMPTY DATA / NO-OP';
   message: string;
   reason?: string;
   suggestion?: string;
@@ -45,6 +79,7 @@ export function buildExecutionIssue(node: WorkflowNode | { id: string, data?: { 
     nodeName: ((node as any).data?.label as string) || nodeType,
     nodeType,
     severity: 'error',
+    category: 'RUNTIME ERROR',
     message: 'This step failed.',
     reason: rawError,
     suggestion: 'Check the raw error details below.',
@@ -56,11 +91,13 @@ export function buildExecutionIssue(node: WorkflowNode | { id: string, data?: { 
   // Database checks
   if (nodeType === 'database') {
     if (errStr.includes('table name is required')) {
+      issue.category = 'CONFIGURATION ERROR';
       issue.message = 'No table selected';
       issue.reason = undefined;
       issue.suggestion = 'Choose a table for this Database node.';
       issue.field = 'table';
     } else if (errStr.includes('does not exist in the database')) {
+      issue.category = 'CONFIGURATION ERROR';
       const match = rawError.match(/Table "([^"]+)" does not exist/i);
       const tableName = match ? match[1] : 'selected';
       issue.message = `Table "${tableName}" was not found or is not accessible.`;
@@ -74,10 +111,13 @@ export function buildExecutionIssue(node: WorkflowNode | { id: string, data?: { 
       
       const operation = ((node as any).data?.config as any)?.operation || 'select';
       if (errStr.includes('policy') || errStr.includes('permission') || errStr.includes('row level security')) {
+        issue.category = 'PERMISSION ERROR';
         issue.suggestion = 'This operation may be blocked by Row Level Security — check that the row\'s owner matches the logged-in user.';
       } else if (operation === 'insert') {
+        issue.category = 'VALIDATION ERROR';
         issue.suggestion = "Check that all required columns are provided and match the table's schema.";
       } else {
+        issue.category = 'RUNTIME ERROR';
         issue.suggestion = "Check the database configuration or query parameters.";
       }
     }
@@ -86,11 +126,13 @@ export function buildExecutionIssue(node: WorkflowNode | { id: string, data?: { 
   // Email checks
   else if (nodeType === 'email') {
     if (errStr.includes('"to" address is required')) {
+      issue.category = 'CONFIGURATION ERROR';
       issue.message = 'Recipient email is missing.';
       issue.reason = undefined;
       issue.suggestion = "Set the 'to' field on this Email node, or map it from a prior node's output.";
       issue.field = 'to';
     } else if (errStr.includes('email delivery failed')) {
+      issue.category = 'NETWORK ERROR';
       issue.message = 'Email could not be sent.';
       issue.reason = rawError.replace(/^Error:\s*Email delivery failed:?/i, '').trim();
       issue.suggestion = 'Check the Resend API key configuration in Supabase, and confirm the recipient address is valid.';
@@ -100,6 +142,7 @@ export function buildExecutionIssue(node: WorkflowNode | { id: string, data?: { 
   // API / Webhook checks
   else if (nodeType === 'api_call' || nodeType === 'webhook' || nodeType === 'api') {
     if (errStr.includes('url is required')) {
+      issue.category = 'CONFIGURATION ERROR';
       issue.message = 'No URL configured.';
       issue.reason = undefined;
       issue.suggestion = 'Set the URL field on this node.';
@@ -110,22 +153,75 @@ export function buildExecutionIssue(node: WorkflowNode | { id: string, data?: { 
       issue.message = 'The external API request failed.';
       issue.reason = rawError;
       if (status === '401' || status === '403') {
+        issue.category = 'AUTHENTICATION ERROR';
         issue.suggestion = 'Check the API credentials/headers for this call.';
       } else if (status === '404') {
+        issue.category = 'NETWORK ERROR';
         issue.suggestion = 'Check the URL — the endpoint was not found.';
+      } else if (status === '429') {
+        issue.category = 'RATE LIMIT ERROR';
+        issue.suggestion = 'You are making too many requests. Slow down or check limits.';
       } else if (status.startsWith('5')) {
+        issue.category = 'NETWORK ERROR';
         issue.suggestion = 'The external API is failing — this may be temporary.';
       } else {
+        issue.category = 'NETWORK ERROR';
         issue.suggestion = 'Check the API response details below.';
       }
     }
   }
 
   // Variable resolution
-  if (errStr.includes('unresolved variable') || /variable .*\$\{.*\}.* not found/i.test(errStr) || errStr.includes('undefined variable')) {
-    issue.message = 'A required value could not be found.';
-    issue.reason = rawError;
-    issue.suggestion = 'Check that an earlier node actually produces this value, and that the variable name matches exactly.';
+  if (errStr.includes('unresolved variable') || /variable .*\$\{.*\}.* not found/i.test(errStr) || errStr.includes('undefined variable') || errStr.includes('missing property') || errStr.includes('missing variable') || errStr.includes('cannot resolve')) {
+    issue.category = 'CONFIGURATION ERROR';
+    
+    // Parse the deterministic information out of our own error format
+    const missingPropMatch = rawError.match(/(?:Missing property|Missing variable|Cannot resolve)\s*"(\$\{[^}]+\})"/);
+    if (missingPropMatch) {
+      const fullPath = missingPropMatch[1]; // e.g. "${node_node-1.output}"
+      
+      let sourceNodeStr = 'an upstream node';
+      const refMatch = fullPath.match(/\$\{([^}]+)\}/);
+      if (refMatch) {
+        const parts = refMatch[1].split('.');
+        if (parts.length > 0 && parts[0].startsWith('node_')) {
+          const possibleId = parts[0].substring(5);
+          sourceNodeStr = `Node '${possibleId}'`;
+        } else if (parts.length > 0) {
+          sourceNodeStr = `Node '${parts[0]}'`;
+        }
+      }
+
+      issue.message = `The reference ${fullPath} could not be resolved.`;
+      
+      let reasonStr = rawError;
+      if (rawError.includes('Missing property')) {
+        const keyMatch = fullPath.match(/\.([^.}]+)\}$/);
+        const key = keyMatch ? keyMatch[1] : 'requested';
+        reasonStr = `The node executed, but the requested output key "${key}" was not found.`;
+      } else if (rawError.includes('Missing variable')) {
+        reasonStr = `The expected upstream node was not found or did not execute.`;
+      }
+
+      issue.reason = reasonStr;
+      
+      const suggestionMatch = rawError.match(/(?:Did you mean|Available properties|Available variables):(.*)/);
+      if (suggestionMatch) {
+        issue.suggestion = `Check the reference. ${suggestionMatch[0].trim()}`;
+      } else {
+        issue.suggestion = `Check that ${sourceNodeStr} actually produces this value and that the variable name matches exactly.`;
+      }
+    } else {
+      issue.message = 'A required value could not be found.';
+      issue.reason = rawError;
+      issue.suggestion = 'Check that an earlier node actually produces this value, and that the variable name matches exactly.';
+    }
+  }
+
+  // Timeout catch-all
+  if (errStr.includes('timeout') || errStr.includes('timed out')) {
+    issue.category = 'TIMEOUT';
+    issue.message = 'The request took too long to complete.';
   }
 
   return issue;
@@ -163,7 +259,10 @@ export async function startExecution(
   return execution;
 }
 
+const runningExecutions = new Set<string>();
+
 export async function cancelExecution(executionId: string): Promise<void> {
+  runningExecutions.delete(executionId);
   await updateExecution(executionId, {
     status: 'cancelled',
     completed_at: new Date().toISOString()
@@ -229,6 +328,7 @@ async function executeWorkflow(context: ExecutionContext): Promise<void> {
     });
 
     await log('info', `Execution started for workflow ${workflowId}`);
+    runningExecutions.add(executionId);
 
     // Fetch the workflow to get nodes + edges for topological sort
     const { data: workflow, error: wfError } = await supabase
@@ -284,6 +384,20 @@ async function executeWorkflow(context: ExecutionContext): Promise<void> {
       const nodeConfig = buildNodeConfig(node, edges, ctx);
       const nodeStartTime = new Date().toISOString();
 
+      if (!runningExecutions.has(executionId)) {
+         await log('warn', `Execution cancelled. Skipping node: ${nodeName}`);
+         report.nodes.push({
+           id: node.id,
+           name: nodeName,
+           type: nodeType,
+           status: 'cancelled',
+           startTime: nodeStartTime,
+           endTime: new Date().toISOString()
+         });
+         skippedNodeIds.add(node.id);
+         continue;
+      }
+
       // Find or create the step record
       const steps = await getWorkflowSteps(workflowId);
       let step = steps.find(s => s.id === node.id);
@@ -302,6 +416,16 @@ async function executeWorkflow(context: ExecutionContext): Promise<void> {
       if (loopHandledNodes.has(node.id)) {
         await log('info', `[${i + 1}/${orderedNodes.length}] Skipping node: ${nodeName} (handled by loop)`);
         await updateWorkflowStep(step.id, { status: 'skipped' });
+        
+        report.nodes.push({
+          id: node.id,
+          name: nodeName,
+          type: nodeType,
+          status: 'skipped',
+          startTime: nodeStartTime,
+          endTime: new Date().toISOString()
+        });
+        
         skippedNodeIds.add(node.id);
         continue;
       }
@@ -323,8 +447,18 @@ async function executeWorkflow(context: ExecutionContext): Promise<void> {
         });
 
         if (!isActive) {
-          await log('info', `[${i + 1}/${orderedNodes.length}] Skipping node: ${nodeName} (branch not taken)`);
+          await log('info', `[${i + 1}/${orderedNodes.length}] Skipping node: ${nodeName} (branch inactive)`);
           await updateWorkflowStep(step.id, { status: 'skipped' });
+          
+          report.nodes.push({
+            id: node.id,
+            name: nodeName,
+            type: nodeType,
+            status: 'skipped',
+            startTime: nodeStartTime,
+            endTime: new Date().toISOString()
+          });
+          
           skippedNodeIds.add(node.id);
           continue;
         }
@@ -368,7 +502,7 @@ async function executeWorkflow(context: ExecutionContext): Promise<void> {
         }
 
         // Store output in shared context under node id and label
-        const normalizedName = nodeName.toLowerCase().replace(/\s+/g, '_');
+        const normalizedName = normalizeNodeLabel(nodeName);
         ctx[`node_${node.id}`] = result;
         ctx[`${normalizedName}_output`] = result; // legacy
         ctx[normalizedName] = result;             // exact name mapping (e.g. analyze_weather)
@@ -379,7 +513,9 @@ async function executeWorkflow(context: ExecutionContext): Promise<void> {
           type: nodeType,
           status: 'success',
           startTime: nodeStartTime,
-          endTime: new Date().toISOString()
+          endTime: new Date().toISOString(),
+          inputs: redactSensitiveData(nodeConfig),
+          output: redactSensitiveData(result)
         });
         report.executedNodes++;
 
@@ -402,7 +538,9 @@ async function executeWorkflow(context: ExecutionContext): Promise<void> {
           startTime: nodeStartTime,
           endTime: new Date().toISOString(),
           error: issue.message,
-          ignored: continueOnFail
+          ignored: continueOnFail,
+          inputs: redactSensitiveData(nodeConfig),
+          output: null
         });
         report.failedNodes++;
 
@@ -427,16 +565,40 @@ async function executeWorkflow(context: ExecutionContext): Promise<void> {
     }
 
     report.endTime = new Date().toISOString();
-    // All nodes succeeded
+    
+    // Identify final output from terminal nodes
+    const terminalNodes = orderedNodes.filter(n => {
+      const outgoing = edges.filter(e => e.source === n.id);
+      return outgoing.length === 0;
+    });
+
+    const finalOutput: Record<string, any> = {};
+    for (const tn of terminalNodes) {
+      const tnLabel = normalizeNodeLabel((tn.data?.label || (tn as any).name || tn.id) as string);
+      if (ctx[tnLabel] !== undefined) {
+        finalOutput[tnLabel] = ctx[tnLabel];
+      }
+    }
+    
+    (report as any).finalOutput = redactSensitiveData(finalOutput);
+
+    // Determine final status
+    const finalStatus = runningExecutions.has(executionId) ? 'completed' : 'cancelled';
+
     await updateExecution(executionId, {
-      status: 'completed',
+      status: finalStatus,
       progress: 100,
       completed_at: report.endTime,
       result: { variables: ctx, report }
     });
 
-    await log('info', 'Workflow execution completed successfully');
-    onProgress?.(100, 'Completed');
+    if (finalStatus === 'completed') {
+      await log('info', `Execution completed successfully for workflow ${workflowId}`);
+      onProgress?.(100, 'Completed');
+    } else {
+      await log('warn', `Execution cancelled for workflow ${workflowId}`);
+      onProgress?.(100, 'Cancelled');
+    }
 
   } catch (error) {
     const rawMsg = error instanceof Error ? error.message : String(error);
@@ -457,16 +619,18 @@ async function executeWorkflow(context: ExecutionContext): Promise<void> {
       completed_at: new Date().toISOString()
     }).catch(console.error);
     onProgress?.(0, 'Failed');
+  } finally {
+    runningExecutions.delete(executionId);
   }
 }
 
 // ─── Node Dispatcher ──────────────────────────────────────────────────────────
 
-async function executeNode(
+export async function executeNode(
   nodeType: string,
   config: Record<string, unknown>,
   ctx: Record<string, unknown>,
-  log: (level: string, message: string) => Promise<void>,
+  log: (level: string, message: string, metadata?: any) => Promise<void>,
   node?: WorkflowNode,
   nodes?: WorkflowNode[],
   edges?: WorkflowEdge[]
@@ -619,6 +783,7 @@ async function executeApiCall(
     status: response.status,
     statusText: response.statusText,
     data: responseData,
+    output: responseData, // Backward compatibility for legacy workflows using .output
     headers: Object.fromEntries(response.headers.entries())
   };
 }
@@ -704,7 +869,7 @@ async function executeDatabaseNode(
       const { data, error } = await query;
       if (error) throw new Error(`Database select error: ${error.message}`);
       await log('info', `Database select returned ${data?.length ?? 0} rows`);
-      return { rows: data, count: data?.length ?? 0 };
+      return { rows: data, data: data, count: data?.length ?? 0 }; // Return 'data' for canonical UI match, 'rows' for legacy
     }
 
     case 'insert': {
@@ -774,19 +939,67 @@ async function executeDatabaseNode(
   }
 }
 
-/** Condition — real expression evaluator */
+/** Condition — evaluate rules or raw expression */
 async function executeCondition(
   config: Record<string, unknown>,
   ctx: Record<string, unknown>,
   log: (l: string, m: string) => Promise<void>
 ): Promise<unknown> {
-  const expression = interpolate(String(config.condition || config.expression || 'true'), ctx);
-  const result = evaluateExpression(expression, ctx);
+  let result = false;
+  let conditionStr = '';
 
-  await log('info', `Condition "${expression}" → ${result}`);
+  if (config.mode === 'easy') {
+    const conditions = Array.isArray(config.conditions) ? config.conditions : [];
+    const logicalOp = config.logicalOperator === 'OR' ? 'OR' : 'AND';
+    
+    const matchResults = [];
+    
+    for (const c of conditions) {
+      const left = typeof c.left === 'string' ? interpolate(c.left, ctx) : c.left;
+      const right = typeof c.right === 'string' ? interpolate(c.right, ctx) : c.right;
+      const op = String(c.operator || 'eq').toLowerCase();
+      
+      let match = false;
+      const sLeft = String(left || '');
+      const sRight = String(right || '');
+      const nLeft = Number(left);
+      const nRight = Number(right);
+      
+      switch (op) {
+        case 'eq': match = sLeft === sRight; break;
+        case 'neq': match = sLeft !== sRight; break;
+        case 'gt': match = !isNaN(nLeft) && !isNaN(nRight) ? nLeft > nRight : sLeft > sRight; break;
+        case 'gte': match = !isNaN(nLeft) && !isNaN(nRight) ? nLeft >= nRight : sLeft >= sRight; break;
+        case 'lt': match = !isNaN(nLeft) && !isNaN(nRight) ? nLeft < nRight : sLeft < sRight; break;
+        case 'lte': match = !isNaN(nLeft) && !isNaN(nRight) ? nLeft <= nRight : sLeft <= sRight; break;
+        case 'contains': match = sLeft.toLowerCase().includes(sRight.toLowerCase()); break;
+        case 'not_contains': match = !sLeft.toLowerCase().includes(sRight.toLowerCase()); break;
+        case 'starts_with': match = sLeft.toLowerCase().startsWith(sRight.toLowerCase()); break;
+        case 'ends_with': match = sLeft.toLowerCase().endsWith(sRight.toLowerCase()); break;
+        case 'is_empty': match = !left || sLeft.trim() === ''; break;
+        case 'not_empty': match = !!left && sLeft.trim() !== ''; break;
+        case 'is_true': match = sLeft.toLowerCase() === 'true'; break;
+        case 'is_false': match = sLeft.toLowerCase() === 'false'; break;
+      }
+      matchResults.push(match);
+    }
+    
+    if (conditions.length === 0) {
+      result = true;
+      conditionStr = 'No conditions (Default: true)';
+    } else {
+      result = logicalOp === 'OR' ? matchResults.some(r => r) : matchResults.every(r => r);
+      conditionStr = `Evaluated ${conditions.length} conditions (${logicalOp})`;
+    }
+  } else {
+    conditionStr = interpolate(String(config.condition || config.expression || 'true'), ctx);
+    result = evaluateExpression(conditionStr, ctx);
+  }
+
+  await log('info', `Condition "${conditionStr}" → ${result ? 'TRUE' : 'FALSE'}`);
 
   return {
-    condition: expression,
+    condition: conditionStr,
     result,
     branch: result ? 'true' : 'false'
   };
@@ -808,7 +1021,7 @@ async function executeDelay(
   return { waited_ms: safeDuration };
 }
 
-/** Loop — iterate and collect results */
+/** Loop — iterate and run body nodes as a subgraph */
 async function executeLoop(
   config: Record<string, unknown>,
   ctx: Record<string, unknown>,
@@ -819,44 +1032,180 @@ async function executeLoop(
 ): Promise<unknown> {
   const iterations = Number(config.iterations || 1);
   const itemsKey = config.items as string | undefined;
-  const items = itemsKey && ctx[itemsKey] ? (ctx[itemsKey] as unknown[]) : null;
-  const count = items ? items.length : Math.min(iterations, 100);
-
-  await log('info', `Loop: ${count} iterations`);
-
-  let bodyNodes: WorkflowNode[] = [];
-  if (node && nodes && edges) {
-    let bodyEdges = edges.filter(e => e.source === node.id && (e.sourceHandle === 'body' || e.sourceHandle === 'item'));
-    if (bodyEdges.length === 0) {
-      bodyEdges = edges.filter(e => e.source === node.id && e.sourceHandle !== 'next');
-    }
-    bodyNodes = nodes.filter(n => bodyEdges.some(e => e.target === n.id));
-  }
-
-  const results: unknown[] = [];
-  for (let i = 0; i < count; i++) {
-    const item = items ? items[i] : i;
-    ctx['item'] = item;
-    ctx['index'] = i;
-
-    let lastResult = null;
-    for (const bNode of bodyNodes) {
-      const bType = resolveNodeType(bNode);
-      const bConfig = buildNodeConfig(bNode, edges || [], ctx);
-      
-      try {
-        await log('info', `Loop body [${i + 1}/${count}]: running ${bNode.data?.label || bType}`);
-        lastResult = await executeNode(bType, bConfig, ctx, log, bNode, nodes, edges);
-      } catch (err) {
-        await log('error', `Loop body node ${bNode.id} failed on index ${i}: ${String(err)}`);
-        throw err;
+  
+  let items: unknown[] | null = null;
+  if (itemsKey) {
+    let source: unknown = null;
+    
+    // Attempt canonical resolution first if it looks like a variable
+    const cleanKey = itemsKey.trim();
+    if (cleanKey.startsWith('${') && cleanKey.endsWith('}')) {
+      const { value, found } = resolveVariable(cleanKey, ctx, nodes);
+      if (found) {
+        source = value;
+      }
+    } else {
+      // Try resolving as plain key directly
+      const { value, found } = resolveVariable(cleanKey, ctx, nodes);
+      if (found) {
+        source = value;
+      } else {
+         // Fallback to full interpolation + JSON parse for complex expressions
+         try {
+           const resolvedItemsStr = interpolate(cleanKey.includes('${') ? cleanKey : `\${${cleanKey}}`, ctx, nodes);
+           source = JSON.parse(resolvedItemsStr);
+         } catch {
+           // Ignore fallback parse error
+         }
       }
     }
 
-    results.push({ index: i, item, completed: true, result: lastResult });
+    if (Array.isArray(source)) {
+      items = source;
+    } else if (typeof source === 'object' && source !== null) {
+      if (Array.isArray((source as any).rows)) items = (source as any).rows;
+      else if (Array.isArray((source as any).data)) items = (source as any).data;
+      else if (Array.isArray((source as any).results)) items = (source as any).results;
+    }
   }
 
-  return { results, iterations: count, handledNodes: bodyNodes.map(n => n.id) };
+  const count = items ? items.length : Math.min(iterations, 100);
+
+  if (count === 0) {
+    await log('info', `Loop: 0 items to process. Skipping body.`);
+    return { results: [], iterations: 0, completed: 0, failed: 0, skipped: 0, handledNodes: [] };
+  }
+
+  await log('info', `Loop: processing ${count} items`);
+
+  let bodyNodes: WorkflowNode[] = [];
+  let bodyEdges: WorkflowEdge[] = [];
+  if (node && nodes && edges) {
+    // Find all nodes downstream of the loop body
+    // The loop body starts on edges from the loop node that have sourceHandle 'body', 'item',
+    // or no handle at all (plain connection from the loop node to its body)
+    const bodyStarts = edges.filter(e => 
+      e.source === node.id && (
+        e.sourceHandle === 'body' || 
+        e.sourceHandle === 'item' || 
+        e.sourceHandle === 'true' || 
+        e.sourceHandle == null ||   // null or undefined — plain edge
+        e.sourceHandle === ''
+      )
+    );
+    
+    const queue = bodyStarts.map(e => e.target);
+    const bodySet = new Set<string>(queue);
+    
+    // Safety against infinite graphs during discovery
+    let loops = 0;
+    while (queue.length > 0 && loops < 1000) {
+      loops++;
+      const current = queue.shift()!;
+      const outgoing = edges.filter(e => e.source === current);
+      for (const e of outgoing) {
+        // Prevent cyclic discovery
+        if (e.target === node.id) throw new Error(`Infinite loop detected! Node ${current} cycles back to Loop ${node.id}`);
+        if (!bodySet.has(e.target)) {
+          bodySet.add(e.target);
+          queue.push(e.target);
+        }
+      }
+    }
+
+    bodyNodes = nodes.filter(n => bodySet.has(n.id));
+    bodyEdges = edges.filter(e => bodySet.has(e.source) && bodySet.has(e.target));
+  }
+
+  const bodyOrdered = bodyNodes.length > 0 ? topologicalSort(bodyNodes, bodyEdges) : [];
+  
+  const results: unknown[] = [];
+  let completedCount = 0;
+  let failedCount = 0;
+
+  for (let i = 0; i < count; i++) {
+    const item = items ? items[i] : i;
+    
+    // Execution context isolation per iteration
+    const localCtx: Record<string, unknown> = { ...ctx, item, index: i };
+    
+    const skippedNodeIds = new Set<string>();
+    const branchDecisions = new Map<string, string>();
+    let lastResult = null;
+    let iterationFailed = false;
+
+    for (const bNode of bodyOrdered) {
+      if (skippedNodeIds.has(bNode.id)) continue;
+      
+      const bType = resolveNodeType(bNode);
+      const bConfig = buildNodeConfig(bNode, edges || [], localCtx);
+      const bName = bNode.data?.label || bType;
+      
+      // Branch active check
+      const incomingEdges = bodyEdges.filter(e => e.target === bNode.id);
+      if (incomingEdges.length > 0) {
+        const isActive = incomingEdges.some(e => {
+          if (skippedNodeIds.has(e.source)) return false;
+          if (branchDecisions.has(e.source)) {
+            const takenBranch = branchDecisions.get(e.source);
+            if (e.sourceHandle && e.sourceHandle !== takenBranch) return false;
+          }
+          return true;
+        });
+
+        if (!isActive) {
+          skippedNodeIds.add(bNode.id);
+          continue;
+        }
+      }
+      
+      try {
+        await log('info', `Loop [${i + 1}/${count}]: running ${bName}`);
+        lastResult = await executeNode(bType, bConfig, localCtx, log, bNode, nodes, edges);
+        
+        if (bType === 'condition' && lastResult && typeof lastResult === 'object' && 'branch' in lastResult) {
+          branchDecisions.set(bNode.id, String((lastResult as any).branch));
+        } else if (bType === 'decision' && lastResult && typeof lastResult === 'object' && 'selected' in lastResult) {
+          branchDecisions.set(bNode.id, String((lastResult as any).selected));
+        }
+        
+        const normalizedName = String(bName).toLowerCase().replace(/\s+/g, '_');
+        localCtx[`node_${bNode.id}`] = lastResult;
+        localCtx[`${normalizedName}_output`] = lastResult;
+        localCtx[normalizedName] = lastResult;
+        
+      } catch (err) {
+        await log('error', `Loop node ${bNode.id} failed on index ${i}: ${String(err)}`);
+        if (bConfig.continueOnFail) {
+          // If continueOnFail is true, the node fails but doesn't halt the iteration block.
+          // Wait, executeWorkflow doesn't add it to skipped. So we just continue.
+        } else {
+          iterationFailed = true;
+          break; // Halt this iteration
+        }
+      }
+    }
+
+    results.push({ index: i, item, completed: !iterationFailed, result: lastResult });
+    if (iterationFailed) {
+      failedCount++;
+      if (!config.continueOnFail) {
+        await log('error', `Loop halted at iteration ${i + 1} due to failure and continueOnFail=false`);
+        break; // Halt the entire loop node
+      }
+    } else {
+      completedCount++;
+    }
+  }
+
+  return { 
+    results, 
+    iterations: count, 
+    completed: completedCount,
+    failed: failedCount,
+    skipped: count - completedCount - failedCount,
+    handledNodes: bodyNodes.map(n => n.id) 
+  };
 }
 
 /** Email — sends via Supabase Edge Function "resend-email" */
@@ -1068,7 +1417,7 @@ export function topologicalSort(
  * Resolves the semantic node type from a node's data.
  * The ReactFlow `node.type` is always "custom" — the real type lives in `node.data`.
  */
-function resolveNodeType(node: WorkflowNode): string {
+export function resolveNodeType(node: WorkflowNode): string {
   // Try data.node_type first, then data.type, then fall back to node.type
   return (
     (node.data?.node_type as string) ||
@@ -1082,14 +1431,20 @@ function resolveNodeType(node: WorkflowNode): string {
  * Builds the effective config for a node by merging node.data.config
  * with top-level node.data fields, minus UI-only fields.
  */
-function buildNodeConfig(
+export function buildNodeConfig(
   node: WorkflowNode,
   _edges: WorkflowEdge[],
   _ctx: Record<string, unknown>
 ): Record<string, unknown> {
   const dataConfig = (node.data?.config as Record<string, unknown>) || {};
   const { label: _label, icon: _icon, color: _color, config: _cfg, ...rest } = node.data || {};
-  return { ...rest, ...dataConfig };
+  
+  // Strip out UI-specific state keys that start with '_' to avoid polluting inputs
+  const cleanedRest = Object.fromEntries(
+    Object.entries(rest).filter(([k]) => !k.startsWith('_'))
+  );
+  
+  return { ...cleanedRest, ...dataConfig };
 }
 
 function levenshteinDistance(a: string, b: string): number {
@@ -1130,42 +1485,117 @@ function findClosestMatch(target: string, options: string[]): string | null {
   return closestMatch;
 }
 
+export function normalizeNodeLabel(label: string): string {
+  return label.toLowerCase().replace(/[^a-z0-9]/g, '_');
+}
+
+export function extractNodeIdFromReference(ref: string, nodes: WorkflowNode[]): string | null {
+  // Strategy 1: canonical "node_<id>" format — try all node IDs as the suffix
+  // This handles both "node_node-1" (id="node-1") and "node_abc123" (id="abc123")
+  if (ref.startsWith('node_')) {
+    // Try matching ref === `node_${node.id}` for any node
+    const byCanonical = nodes.find(n => ref === `node_${n.id}`);
+    if (byCanonical) return byCanonical.id;
+    
+    // Fallback: strip 5 chars for backward compat
+    const possibleId = ref.substring(5);
+    const byStripped = nodes.find(n => n.id === possibleId);
+    if (byStripped) return byStripped.id;
+  }
+
+  // Strategy 2: direct node id match
+  const byId = nodes.find(n => n.id === ref);
+  if (byId) return byId.id;
+
+  // Strategy 3: normalized label match
+  for (const node of nodes) {
+    const label = (node.data?.label || (node as any).name || node.id) as string;
+    const safeLabel = normalizeNodeLabel(label);
+    if (ref === safeLabel || ref === `${safeLabel}_output`) {
+      return node.id;
+    }
+  }
+
+  return null;
+}
+
+export function resolveVariable(path: string, ctx: Record<string, unknown>, nodes?: WorkflowNode[]): { value: unknown, found: boolean, error?: string } {
+  const parts = path.replace(/^\$\{/, '').replace(/\}$/, '').trim().split('.');
+  if (parts.length === 0) return { value: undefined, found: false, error: 'Empty variable path' };
+
+  let baseKey = parts[0];
+  if (nodes) {
+    const id = extractNodeIdFromReference(baseKey, nodes);
+    if (id) {
+      baseKey = `node_${id}`;
+    }
+  }
+
+  if (!(baseKey in ctx)) {
+    // If we didn't use nodes to resolve, or even if we did and it's missing, try fallback logic for visual selectors
+    if (parts[0] in ctx) {
+      baseKey = parts[0];
+    } else if (`node_${parts[0]}` in ctx) {
+      baseKey = `node_${parts[0]}`;
+    } else {
+      const availableKeys = Object.keys(ctx).filter(k => !k.endsWith('_output') && !k.startsWith('node_'));
+      const closest = findClosestMatch(parts[0], availableKeys);
+      const suggestion = closest ? ` Did you mean "${closest}"?` : ` Available variables: ${availableKeys.join(', ')}`;
+      return { value: undefined, found: false, error: `Missing variable "\${${parts[0]}}".${suggestion}` };
+    }
+  }
+
+  let currentCtx: unknown = ctx[baseKey];
+  let pathFound = parts[0];
+
+  for (let i = 1; i < parts.length; i++) {
+    const part = parts[i];
+    pathFound = `${pathFound}.${part}`;
+
+    if (currentCtx === null || typeof currentCtx !== 'object') {
+       return { value: undefined, found: false, error: `Cannot resolve "\${${pathFound}}". "${parts.slice(0, i).join('.')}" is not an object.` };
+    }
+
+    const recordCtx = currentCtx as Record<string, unknown>;
+    
+    if (!(part in recordCtx)) {
+       const availableKeys = Object.keys(recordCtx);
+       const closest = findClosestMatch(part, availableKeys);
+       const suggestion = closest ? ` Did you mean "${closest}"?` : ` Available properties: ${availableKeys.join(', ')}`;
+       return { value: undefined, found: false, error: `Missing property "\${${pathFound}}".${suggestion}` };
+    }
+
+    currentCtx = recordCtx[part];
+  }
+
+  return { value: currentCtx, found: true };
+}
+
 /**
  * Replaces `${variable}` and `${nested.key}` placeholders in a template string
  * with values from the context.
  * Throws an error with Levenshtein-based suggestions if a variable is missing.
  */
-export function interpolate(template: string, ctx: Record<string, unknown>): string {
+export function interpolate(template: string, ctx: Record<string, unknown>, nodes?: WorkflowNode[]): string {
   if (typeof template !== 'string') return template;
   
   return template.replace(/\$\{([^}]+)\}/g, (_match, rawKey) => {
     const key = rawKey.trim();
-    const parts = key.split('.');
     
-    let currentCtx: unknown = ctx;
-    let pathFound = '';
-    
-    for (let i = 0; i < parts.length; i++) {
-      const part = parts[i];
-      pathFound = pathFound ? `${pathFound}.${part}` : part;
-      
-      if (currentCtx === null || typeof currentCtx !== 'object') {
-         throw new Error(`Cannot resolve "\${${key}}". "${parts.slice(0, i).join('.')}" is not an object.`);
-      }
-      
-      const recordCtx = currentCtx as Record<string, unknown>;
-      
-      if (!(part in recordCtx)) {
-         const availableKeys = Object.keys(recordCtx).filter(k => !k.endsWith('_output')); // hide legacy outputs
-         const closest = findClosestMatch(part, availableKeys);
-         const suggestion = closest ? ` Did you mean "${closest}"?` : ` Available variables: ${availableKeys.join(', ')}`;
-         throw new Error(`Missing variable "\${${pathFound}}".${suggestion}`);
-      }
-      
-      currentCtx = recordCtx[part];
+    // Check if the exact key exists first
+    if (ctx[key] !== undefined) {
+      return typeof ctx[key] === 'object' && ctx[key] !== null ? JSON.stringify(ctx[key]) : String(ctx[key]);
     }
     
-    return currentCtx !== undefined && currentCtx !== null ? String(currentCtx) : '';
+    const { value, found, error } = resolveVariable(key, ctx, nodes);
+    if (!found && error) {
+       throw new Error(error);
+    }
+    
+    if (typeof value === 'object' && value !== null) {
+      return JSON.stringify(value);
+    }
+    return value !== undefined && value !== null ? String(value) : '';
   });
 }
 

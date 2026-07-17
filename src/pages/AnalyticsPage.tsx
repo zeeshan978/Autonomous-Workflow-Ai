@@ -163,9 +163,9 @@ export function AnalyticsPage() {
   return (
     <div className="space-y-6">
       <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="space-y-6">
-        <div className="flex items-center justify-between">
+        <div className="mb-8 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
           <div>
-            <h1 className="text-3xl font-bold">Analytics</h1>
+            <h1 className="text-3xl font-bold tracking-tight mb-1">Analytics</h1>
             <p className="text-muted-foreground">Insights and performance metrics</p>
           </div>
           <div className="flex items-center gap-3">

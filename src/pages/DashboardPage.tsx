@@ -189,7 +189,7 @@ export function DashboardPage() {
           <div>
             <motion.h1 
               initial={{ opacity: 0, x: -20 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: 0.1 }}
-              className="text-4xl font-extrabold tracking-tight mb-2"
+              className="text-3xl font-bold tracking-tight mb-1"
             >
               {greeting}, {user?.full_name?.split(' ')[0] || user?.email?.split('@')[0] || 'User'} <span className="inline-block animate-wave">👋</span>
             </motion.h1>
@@ -234,31 +234,26 @@ export function DashboardPage() {
         </div>
 
         {/* Stats Cards */}
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
-          {loading || executionsLoading
-            ? Array.from({ length: 6 }).map((_, i) => <StatCardSkeleton key={i} />)
-            : statCards.map((stat, index) => (
-                <motion.div key={stat.label} initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: index * 0.04 }}>
-                  <Link to={stat.path}>
-                    <Card className="glass-card cursor-pointer">
-                      <CardContent className="p-4">
-                        <div className="flex items-center gap-3">
-                          <div className={`p-2 rounded-lg ${stat.bg}`}>
-                            <stat.icon className={`h-5 w-5 ${stat.color}`} />
-                          </div>
-                          <div>
-                            <p className="text-2xl font-bold">
-                              <AnimatedCounter value={stat.value} suffix={stat.suffix || ''} />
-                            </p>
-                            <p className="text-xs text-muted-foreground">{stat.label}</p>
-                          </div>
-                        </div>
-                      </CardContent>
-                    </Card>
-                  </Link>
-                </motion.div>
-              ))
-          }
+        <div className="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4 mb-6">
+          {statCards.map((stat, i) => (
+            <motion.div key={stat.label} initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.1 + i * 0.05 }}>
+              <Link to={stat.path}>
+                <Card className="glass-card hover:border-primary/50 cursor-pointer h-full transition-premium">
+                  <CardContent className="p-5 flex flex-col justify-between h-full gap-2">
+                    <div className="flex items-center gap-3">
+                      <div className={`p-2 rounded-lg ${stat.bg}`}>
+                        <stat.icon className={`h-5 w-5 ${stat.color}`} />
+                      </div>
+                      <p className="text-sm font-medium text-muted-foreground">{stat.label}</p>
+                    </div>
+                    <p className="text-2xl font-bold">
+                      <AnimatedCounter value={stat.value} suffix={stat.suffix || ''} />
+                    </p>
+                  </CardContent>
+                </Card>
+              </Link>
+            </motion.div>
+          ))}
         </div>
 
         {/* Charts */}
@@ -298,12 +293,12 @@ export function DashboardPage() {
             </CardContent>
           </Card>
 
-          <Card className="glass-card">
-            <CardHeader>
+          <Card className="glass-card overflow-hidden">
+            <CardHeader className="p-6 border-b border-border/50">
               <CardTitle>Execution Status</CardTitle>
-              <CardDescription>Distribution of all execution outcomes</CardDescription>
+              <CardDescription>Current state of workflows</CardDescription>
             </CardHeader>
-            <CardContent>
+            <CardContent className="p-6">
               {loading ? <Skeleton className="h-[250px] w-full" /> : (
                   <div className="h-[250px] flex flex-col items-center justify-center">
                   {computedStats.statusData.length > 0 ? (
@@ -337,12 +332,12 @@ export function DashboardPage() {
         </div>
 
         {/* Heatmap Row */}
-        <Card className="glass-card mb-6 overflow-hidden">
-          <CardHeader>
-            <CardTitle>Workflow Activity</CardTitle>
-            <CardDescription>Executions over the last 6 months</CardDescription>
+        <Card className="glass-card lg:col-span-2 mb-6 overflow-hidden">
+          <CardHeader className="p-6 border-b border-border/50">
+            <CardTitle>System Activity</CardTitle>
+            <CardDescription>Workflow executions over the past 7 days</CardDescription>
           </CardHeader>
-          <CardContent className="overflow-x-auto pb-4">
+          <CardContent className="p-6">
             {loading ? <Skeleton className="h-32 w-full" /> : (
                 <div className="w-full overflow-hidden flex justify-center mt-6">
                   {computedStats.heatmapData.length > 0 ? (
@@ -367,7 +362,7 @@ export function DashboardPage() {
 
           {/* Recent Executions */}
           <Card className="glass-card lg:col-span-2">
-            <CardHeader>
+            <CardHeader className="p-6 border-b border-border/50">
               <div className="flex items-center justify-between">
                 <div>
                   <CardTitle>Recent Executions</CardTitle>
@@ -378,7 +373,7 @@ export function DashboardPage() {
                 </Link>
               </div>
             </CardHeader>
-            <CardContent>
+            <CardContent className="p-6">
               {loading ? <ListSkeleton /> : computedStats.recent.length === 0 ? (
                 <div className="text-center py-12 text-muted-foreground">
                   <div className="w-24 h-24 mx-auto mb-4 relative">
@@ -429,10 +424,10 @@ export function DashboardPage() {
           {/* Right panel: Quick Actions + Recent Workflows */}
           <div className="space-y-6">
             <Card className="glass-card">
-              <CardHeader>
+              <CardHeader className="p-6 border-b border-border/50">
                 <CardTitle>Quick Actions</CardTitle>
               </CardHeader>
-              <CardContent className="grid grid-cols-2 gap-2">
+              <CardContent className="p-6 grid grid-cols-2 gap-3">
                 {[
                   { icon: Plus, label: 'New Workflow', path: '/workflows/builder', color: 'bg-blue-500' },
                   { icon: Bot, label: 'New Agent', path: '/agents', color: 'bg-green-500' },
@@ -452,13 +447,15 @@ export function DashboardPage() {
             </Card>
 
             <Card className="glass-card">
-              <CardHeader>
+              <CardHeader className="p-6 border-b border-border/50">
                 <div className="flex items-center justify-between">
-                  <CardTitle className="text-sm">Recent Workflows</CardTitle>
-                  <Link to="/workflows/builder"><Button variant="ghost" size="sm" className="text-xs h-7">View All</Button></Link>
+                  <CardTitle>Recent Workflows</CardTitle>
+                  <Link to="/workflows/builder">
+                    <Button variant="ghost" size="sm">View All <ArrowRight className="h-4 w-4 ml-1" /></Button>
+                  </Link>
                 </div>
               </CardHeader>
-              <CardContent>
+              <CardContent className="p-6">
                 {loading ? <ListSkeleton rows={3} /> : recentWorkflows.length === 0 ? (
                   <div className="text-center py-6 text-muted-foreground">
                     <GitBranch className="h-8 w-8 mx-auto mb-2 opacity-30" />

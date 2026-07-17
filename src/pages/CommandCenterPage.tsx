@@ -276,10 +276,10 @@ export function CommandCenterPage() {
         className="space-y-6"
       >
         {/* Header */}
-        <div className="text-center">
+        <div className="text-center mb-8">
           <div className="flex items-center justify-center gap-2 mb-2">
             <Zap className="h-8 w-8 text-primary" />
-            <h1 className="text-4xl font-bold">AI Command Center</h1>
+            <h1 className="text-3xl font-bold tracking-tight">AI Command Center</h1>
           </div>
           <p className="text-muted-foreground text-lg">
             Describe what you want to automate and let AI handle the rest
@@ -287,7 +287,7 @@ export function CommandCenterPage() {
         </div>
 
         {/* Main Command Input */}
-        <Card className="border-2 border-primary/20">
+        <Card className="glass-card border-2 border-primary/30 shadow-[0_0_30px_rgba(var(--primary),0.1)]">
           <CardContent className="p-6">
             <div className="space-y-4">
               <div className="relative">

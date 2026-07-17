@@ -1,5 +1,5 @@
 import type { WorkflowNode, WorkflowEdge } from '@/types';
-import { ALLOWED_TABLES, topologicalSort } from './executionEngine';
+import { ALLOWED_TABLES, topologicalSort, extractNodeIdFromReference } from './executionEngine';
 
 export interface ValidationIssue {
   nodeId: string;
@@ -69,13 +69,6 @@ export function validateWorkflow(nodes: WorkflowNode[], edges: WorkflowEdge[]): 
   const orderedNodes = topologicalSort(nodes, edges || []);
   const nodeOrderIndex = new Map(orderedNodes.map((n, i) => [n.id, i]));
   
-  // Mapping of variable safe names to node IDs
-  const safeLabelToNodeId = new Map<string, string>();
-  for (const node of nodes) {
-    const label = getLabel(node);
-    const safeLabel = label.toLowerCase().replace(/[^a-z0-9]/g, '_');
-    safeLabelToNodeId.set(safeLabel, node.id);
-  }
 
   for (const node of nodes) {
     const label = getLabel(node);
@@ -103,12 +96,34 @@ export function validateWorkflow(nodes: WorkflowNode[], edges: WorkflowEdge[]): 
         addIssue({ nodeId: node.id, nodeName: label, field: 'subject', severity: 'error', message: 'Email requires a subject.', suggestion: 'Enter a subject line.' });
       }
     } else if (type === 'condition' || type === 'decision') {
-      if (!config.condition || String(config.condition).trim() === '') {
-        addIssue({ nodeId: node.id, nodeName: label, field: 'condition', severity: 'error', message: 'Condition expression is required.', suggestion: 'Enter a condition (e.g. ${step.count} > 0).' });
+      const mode = config.mode || 'easy';
+      if (mode === 'easy') {
+        const conditions = Array.isArray(config.conditions) ? config.conditions : [];
+        if (conditions.length === 0) {
+           addIssue({ nodeId: node.id, nodeName: label, field: 'conditions', severity: 'warning', message: 'No conditions configured.', suggestion: 'Add at least one condition or it will default to true.' });
+        }
+      } else {
+        if (!config.condition || String(config.condition).trim() === '') {
+          addIssue({ nodeId: node.id, nodeName: label, field: 'condition', severity: 'error', message: 'Condition expression is required.', suggestion: 'Enter a condition (e.g. ${step.count} > 0).' });
+        }
+      }
+      
+      const outgoingEdges = edges.filter(e => e.source === node.id);
+      const hasTrue = outgoingEdges.some(e => e.sourceHandle === 'true');
+      const hasFalse = outgoingEdges.some(e => e.sourceHandle === 'false');
+      if (outgoingEdges.length > 0 && !hasTrue && !hasFalse) {
+         // Legacy structure or malformed
+         addIssue({ nodeId: node.id, nodeName: label, field: 'edges', severity: 'warning', message: 'Condition has outgoing connections without explicit TRUE/FALSE handles.', suggestion: 'Reconnect the outgoing paths to the TRUE or FALSE handles.' });
       }
     } else if (type === 'loop') {
       if (!config.items || String(config.items).trim() === '') {
-        addIssue({ nodeId: node.id, nodeName: label, field: 'items', severity: 'warning', message: 'Loop has no item source configured — will run a fixed iteration count instead of real data.', suggestion: 'Reference an array output, e.g. ${fetch_users.rows}.' });
+        addIssue({ nodeId: node.id, nodeName: label, field: 'items', severity: 'warning', message: 'Loop has no item source configured.', suggestion: 'Reference an array output, e.g. ${fetch_users.rows}.' });
+      }
+      
+      const outgoingEdges = edges.filter(e => e.source === node.id);
+      const hasBody = outgoingEdges.some(e => e.sourceHandle === 'body' || e.sourceHandle === 'item');
+      if (!hasBody) {
+         addIssue({ nodeId: node.id, nodeName: label, field: 'edges', severity: 'warning', message: 'Loop body is not connected.', suggestion: 'Connect the ITEM handle to the nodes you want to loop over.' });
       }
     } else if (type === 'database') {
       const operation = String(config.operation || 'select').toLowerCase();
@@ -122,11 +137,18 @@ export function validateWorkflow(nodes: WorkflowNode[], edges: WorkflowEdge[]): 
         addIssue({ nodeId: node.id, nodeName: label, field: 'table', severity: 'error', message: `Table "${table}" does not exist.`, suggestion: `Select an existing table: ${ALLOWED_TABLES.join(', ')}` });
       }
       
-      if (operation === 'insert' && (!config.record || Object.keys(config.record).length === 0)) {
+      let parsedFilters: any = {};
+      let parsedRecord: any = {};
+      let parsedUpdates: any = {};
+      try { parsedFilters = typeof config.filters === 'string' ? JSON.parse(config.filters) : config.filters || {}; } catch { /* ignore */ }
+      try { parsedRecord = typeof config.record === 'string' ? JSON.parse(config.record) : config.record || {}; } catch { /* ignore */ }
+      try { parsedUpdates = typeof config.updates === 'string' ? JSON.parse(config.updates) : config.updates || {}; } catch { /* ignore */ }
+
+      if (operation === 'insert' && Object.keys(parsedRecord).length === 0) {
         addIssue({ nodeId: node.id, nodeName: label, field: 'record', severity: 'error', message: 'Insert operation requires a record payload.', suggestion: 'Provide record data to insert.' });
-      } else if (operation === 'update' && (!config.updates || Object.keys(config.updates).length === 0)) {
+      } else if (operation === 'update' && Object.keys(parsedUpdates).length === 0) {
         addIssue({ nodeId: node.id, nodeName: label, field: 'updates', severity: 'error', message: 'Update operation requires an updates payload.', suggestion: 'Provide updates data.' });
-      } else if (operation === 'delete' && (!config.filters || Object.keys(config.filters).length === 0)) {
+      } else if (operation === 'delete' && Object.keys(parsedFilters).length === 0) {
         addIssue({ nodeId: node.id, nodeName: label, field: 'filters', severity: 'error', message: 'Delete operation requires filters for safety.', suggestion: 'Provide at least one filter.' });
       }
     }
@@ -138,24 +160,43 @@ export function validateWorkflow(nodes: WorkflowNode[], edges: WorkflowEdge[]): 
     while ((match = varRegex.exec(configStr)) !== null) {
       const varPath = match[1];
       const parts = varPath.split('.');
-      if (parts.length > 0) {
-        const refNodeLabel = parts[0];
-        if (refNodeLabel === 'item') continue; // Loop item variable, valid inside loop bodies (assumed safe for now)
-        
-        const refNodeId = safeLabelToNodeId.get(refNodeLabel);
-        if (refNodeId) {
+      if (parts.length === 0) continue;
+
+      let refSegment = parts[0];
+
+      // Skip well-known runtime variables
+      if (refSegment === 'item' || refSegment === 'env' || refSegment === 'index') continue;
+
+      // Handle canonical node_ prefix: ${node_nodeId.field} — extract actual node id
+      // e.g. "node_node-1" → look for node with id "node-1"
+      // e.g. "node_node_2_with_underscores" → look for node with that exact id
+      if (refSegment.startsWith('node_')) {
+        const possibleId = refSegment.substring(5); // strip 'node_'
+        const directMatch = nodes.find(n => n.id === possibleId);
+        if (directMatch) {
           const currentIndex = nodeOrderIndex.get(node.id) ?? -1;
-          const refIndex = nodeOrderIndex.get(refNodeId) ?? -1;
-          
+          const refIndex = nodeOrderIndex.get(directMatch.id) ?? -1;
           if (refIndex >= currentIndex) {
-            addIssue({ nodeId: node.id, nodeName: label, field: 'config', severity: 'error', message: `Variable \${${varPath}} references a node that hasn't run at this point in the workflow.`, suggestion: `Ensure "${refNodeLabel}" executes before this node.` });
+            addIssue({ nodeId: node.id, nodeName: label, field: 'config', severity: 'error', message: `Variable \${${varPath}} references a node that hasn't run at this point in the workflow.`, suggestion: `Ensure "${directMatch.data?.label || directMatch.id}" executes before this node.` });
           }
-        } else {
-          // If we can't find a matching node, it might be a system variable or invalid. We'll warn if it's not 'env' or 'item'
-          if (refNodeLabel !== 'env' && refNodeLabel !== 'item') {
-             addIssue({ nodeId: node.id, nodeName: label, field: 'config', severity: 'error', message: `Variable \${${varPath}} references a node that doesn't exist yet or hasn't run at this point in the workflow.`, suggestion: `Check variable spelling or ensure the node exists.` });
-          }
+          continue; // Valid reference — move on
         }
+        // If not a direct id match, fall through to label matching below with possibleId
+        refSegment = possibleId;
+      }
+      
+      const refNodeId = extractNodeIdFromReference(refSegment, nodes);
+      if (refNodeId) {
+        const currentIndex = nodeOrderIndex.get(node.id) ?? -1;
+        const refIndex = nodeOrderIndex.get(refNodeId) ?? -1;
+        
+        if (refIndex >= currentIndex) {
+          addIssue({ nodeId: node.id, nodeName: label, field: 'config', severity: 'error', message: `Variable \${${varPath}} references a node that hasn't run at this point in the workflow.`, suggestion: `Ensure "${refSegment}" executes before this node.` });
+        }
+        // else: valid upstream reference — no issue
+      } else {
+        // Unknown reference — could be a typo or genuinely missing node
+        addIssue({ nodeId: node.id, nodeName: label, field: 'config', severity: 'error', message: `Variable \${${varPath}} references a node that doesn't exist: "${refSegment}".`, suggestion: `Check the variable name. Use the node's label (lowercase, underscores) or the canonical node_ID format.` });
       }
     }
 

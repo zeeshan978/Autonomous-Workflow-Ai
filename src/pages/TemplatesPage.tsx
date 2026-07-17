@@ -13,6 +13,7 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@/components/ui/alert-dialog';
 import { useToast } from '@/hooks/use-toast';
 import { getWorkflows, createWorkflow, deleteWorkflow } from '@/services/database';
+import { remapWorkflowIDs } from '@/lib/workflowRemap';
 import type { Workflow } from '@/types';
 import { DEFAULT_TEMPLATES, COMMUNITY_TEMPLATES, type TemplateDefinition } from '@/data/templates';
 
@@ -55,21 +56,27 @@ export function TemplatesPage() {
   const handleDuplicate = async (template: Workflow) => {
     if (!user?.id) return;
     try {
+      const rawNodes = typeof template.nodes === 'string' ? JSON.parse(template.nodes) : template.nodes;
+      const rawEdges = typeof template.edges === 'string' ? JSON.parse(template.edges) : template.edges;
+      
+      const { nodes: remappedNodes, edges: remappedEdges } = remapWorkflowIDs(rawNodes, rawEdges);
+      
       await createWorkflow({
         user_id: user.id,
         agent_id: template.agent_id,
         name: `${template.name} (Copy)`,
         description: template.description,
         prompt: template.prompt,
-        nodes: template.nodes,
-        edges: template.edges,
+        nodes: remappedNodes,
+        edges: remappedEdges,
         variables: template.variables,
         status: 'draft',
         is_template: false
       });
       toast({ title: 'Template duplicated' });
       loadTemplates();
-    } catch (error: any) { toast({ title: 'Failed to duplicate', description: error?.message || String(error), variant: 'destructive' });
+    } catch (error: any) { 
+      toast({ title: 'Failed to duplicate', description: error?.message || String(error), variant: 'destructive' });
     }
   };
 
@@ -165,9 +172,11 @@ export function TemplatesPage() {
   return (
     <div className="space-y-6">
       <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="space-y-6">
-        <div>
-          <h1 className="text-3xl font-bold">Workflow Templates</h1>
-          <p className="text-muted-foreground">Pre-built workflows ready to use</p>
+        <div className="mb-8 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+          <div>
+            <h1 className="text-3xl font-bold tracking-tight mb-1">Workflow Templates</h1>
+            <p className="text-muted-foreground">Pre-built workflows ready to use</p>
+          </div>
         </div>
 
         <div className="flex flex-col sm:flex-row gap-4 mb-6">

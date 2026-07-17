@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useAuth } from '@/hooks/useAuth';
 import { useNavigate, Link } from 'react-router-dom';
 import { motion } from 'framer-motion';
-import { Play, CheckCircle, XCircle, Clock, RotateCcw, StopCircle, Search, ChevronRight, Activity, Loader2, RefreshCw, Plus, Trash2 } from 'lucide-react';
+import { Play, CheckCircle, XCircle, Clock, RotateCcw, StopCircle, Search, ChevronRight, Activity, Loader2, RefreshCw, Plus, Trash2, Stethoscope, FileOutput } from 'lucide-react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -15,15 +15,149 @@ import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContai
 import { useToast } from '@/hooks/use-toast';
 import { Checkbox } from '@/components/ui/checkbox';
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@/components/ui/alert-dialog';
-import { deleteExecution, deleteExecutions, getLogs, updateExecution } from '@/services/database';
+import { deleteExecution, deleteExecutions, getLogs, updateExecution, getWorkflow } from '@/services/database';
+import { cancelExecution, startExecution } from '@/services/executionEngine';
 import { cn } from '@/lib/utils';
 import type { Execution, Log } from '@/types';
 import { formatRelativeTime } from '@/lib/time';
 import { format } from 'date-fns';
 import { useExecutionsQuery } from '@/hooks/useExecutionsQuery';
 import { queryClient } from '@/lib/queryClient';
+import { WorkflowOutputViewer } from '@/components/WorkflowOutputViewer';
 
 type ExecutionWithWorkflow = Execution & { workflows?: { name: string; variables?: Record<string, unknown> } | null };
+
+function SimpleOutput({ data }: { data: any }) {
+  if (Array.isArray(data)) {
+    return (
+      <div className="space-y-1">
+        <p className="text-muted-foreground">Array ({data.length} items)</p>
+        <div className="pl-2 border-l-2">
+           {data.slice(0, 10).map((val, i) => (
+             <div key={i} className="mb-1"><span className="opacity-50">[{i}]</span> {typeof val === 'object' ? JSON.stringify(val) : String(val)}</div>
+           ))}
+           {data.length > 10 && <div className="text-muted-foreground">... {data.length - 10} more</div>}
+        </div>
+      </div>
+    );
+  }
+  return (
+    <div className="grid grid-cols-1 gap-1">
+      {Object.entries(data).map(([key, val]) => (
+        <div key={key} className="flex flex-col sm:flex-row sm:gap-2 border-b last:border-0 pb-1">
+          <span className="font-semibold text-muted-foreground min-w-[120px]">{key}</span>
+          <span className="font-mono break-all">{typeof val === 'object' ? JSON.stringify(val) : String(val)}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function OutputViewer({ data }: { data: any }) {
+  const [view, setView] = useState<'simple' | 'json'>('simple');
+  if (data === null || data === undefined) return <p className="text-muted-foreground text-xs italic">No output</p>;
+  
+  const isObject = typeof data === 'object';
+  
+  return (
+    <div className="mt-2 bg-background border rounded overflow-hidden text-xs">
+      <div className="flex border-b bg-muted/20">
+        <button className={cn("px-3 py-1 font-medium", view === 'simple' && "bg-muted")} onClick={(e) => { e.preventDefault(); setView('simple'); }}>Simple</button>
+        {isObject && <button className={cn("px-3 py-1 font-medium", view === 'json' && "bg-muted")} onClick={(e) => { e.preventDefault(); setView('json'); }}>JSON</button>}
+      </div>
+      <div className="p-2 overflow-x-auto max-h-[300px]">
+        {view === 'json' || !isObject ? (
+          <pre className="text-xs font-mono">{JSON.stringify(data, null, 2)}</pre>
+        ) : (
+          <SimpleOutput data={data} />
+        )}
+      </div>
+    </div>
+  );
+}
+
+function NodeDetailsRow({ node }: { node: any }) {
+  const [expanded, setExpanded] = useState(false);
+  const isFailed = node.status === 'failed';
+  const isSkipped = node.status === 'skipped';
+  const isCancelled = node.status === 'cancelled';
+  
+  let borderColor = 'border-green-500/50';
+  let bgColor = 'bg-green-500/10';
+  let badgeVariant: any = 'default';
+  
+  if (isFailed) {
+    if (node.ignored) {
+      borderColor = 'border-yellow-500/50';
+      bgColor = 'bg-yellow-500/10';
+      badgeVariant = 'outline';
+    } else {
+      borderColor = 'border-red-500/50';
+      bgColor = 'bg-red-500/10';
+      badgeVariant = 'destructive';
+    }
+  } else if (isSkipped) {
+    borderColor = 'border-gray-400/50 border-dashed';
+    bgColor = 'bg-gray-400/10';
+    badgeVariant = 'secondary';
+  } else if (isCancelled) {
+    borderColor = 'border-gray-500/50';
+    bgColor = 'bg-gray-500/10';
+    badgeVariant = 'secondary';
+  }
+
+  return (
+    <div className={`rounded-md border overflow-hidden ${borderColor}`}>
+       <div 
+         className={`p-3 flex justify-between items-center cursor-pointer hover:bg-muted/30 transition-colors ${bgColor}`}
+         onClick={() => setExpanded(!expanded)}
+       >
+         <div>
+           <span className="font-medium text-sm flex items-center gap-2">
+             <ChevronRight className={cn("h-4 w-4 transition-transform", expanded && "rotate-90")} />
+             {node.name} <span className="text-xs text-muted-foreground">({node.type})</span>
+           </span>
+         </div>
+         <div className="flex items-center gap-3">
+            <span className="text-xs text-muted-foreground">{node.startTime && node.endTime ? `${Math.round((new Date(node.endTime).getTime() - new Date(node.startTime).getTime()))}ms` : '-'}</span>
+            <Badge variant={badgeVariant} className={node.ignored ? 'text-yellow-600 border-yellow-500 bg-yellow-500/20' : ''}>
+              {isFailed && node.ignored ? 'Ignored Failure' : node.status}
+            </Badge>
+         </div>
+       </div>
+       {expanded && (
+         <div className="p-3 border-t bg-card text-sm space-y-4">
+           {node.error && (
+             <div>
+               <p className="font-semibold text-red-500 mb-1">Error</p>
+               <p className="text-xs font-mono text-red-500 break-words bg-red-500/10 p-2 rounded border border-red-500/20">{node.error}</p>
+             </div>
+           )}
+           <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+             <div>
+               <p className="font-semibold text-muted-foreground mb-1">INPUT</p>
+               {node.inputs ? (
+                 <ScrollArea className="h-[250px] w-full rounded border bg-muted/30 p-2">
+                   <pre className="text-xs font-mono">{JSON.stringify(node.inputs, null, 2)}</pre>
+                 </ScrollArea>
+               ) : (
+                 <p className="text-xs text-muted-foreground italic">No input data available</p>
+               )}
+             </div>
+             <div>
+               <p className="font-semibold text-muted-foreground mb-1">OUTPUT</p>
+               {node.output !== undefined ? (
+                 <OutputViewer data={node.output} />
+               ) : (
+                 <p className="text-xs text-muted-foreground italic">No output data available</p>
+               )}
+             </div>
+           </div>
+         </div>
+       )}
+    </div>
+  );
+}
 
 export function ExecutionsPage() {
   const { user } = useAuth();
@@ -42,6 +176,7 @@ export function ExecutionsPage() {
   const [selectedExecutions, setSelectedExecutions] = useState<string[]>([]);
   const [executionToDelete, setExecutionToDelete] = useState<string | null>(null);
   const [bulkDeleteType, setBulkDeleteType] = useState<'selected' | 'failed' | 'completed' | 'all' | null>(null);
+  const [viewerExecution, setViewerExecution] = useState<ExecutionWithWorkflow | null>(null);
 
 
   useEffect(() => {
@@ -63,19 +198,26 @@ export function ExecutionsPage() {
 
   const handleCancel = async (execution: Execution) => {
     try {
-      await updateExecution(execution.id, { status: 'cancelled', completed_at: new Date().toISOString() });
+      await cancelExecution(execution.id);
       toast({ title: 'Execution cancelled' });
       queryClient.invalidateQueries({ queryKey: ['executions'] });
-    } catch (error: any) { toast({ title: 'Failed to cancel', description: error?.message || String(error), variant: 'destructive' });
+    } catch (error: any) { 
+      toast({ title: 'Failed to cancel', description: error?.message || String(error), variant: 'destructive' });
     }
   };
 
   const handleRetry = async (execution: Execution) => {
     try {
-      await updateExecution(execution.id, { status: 'queued', progress: 0, error_message: null });
-      toast({ title: 'Execution queued for retry' });
+      toast({ title: 'Starting retry...' });
+      const workflow = await getWorkflow(execution.workflow_id);
+      if (!workflow) throw new Error('Workflow definition could not be found.');
+      
+      const newExecution = await startExecution(user!.id, workflow);
+      setSelectedExecutionId(newExecution.id);
+      toast({ title: 'Execution started successfully' });
       queryClient.invalidateQueries({ queryKey: ['executions'] });
-    } catch (error: any) { toast({ title: 'Failed to retry', description: error?.message || String(error), variant: 'destructive' });
+    } catch (error: any) { 
+      toast({ title: 'Failed to retry', description: error?.message || String(error), variant: 'destructive' });
     }
   };
 
@@ -213,9 +355,9 @@ export function ExecutionsPage() {
   return (
     <div className="space-y-6">
       <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="space-y-6">
-        <div className="flex items-center justify-between">
+        <div className="mb-8 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
           <div>
-            <h1 className="text-3xl font-bold">Executions</h1>
+            <h1 className="text-3xl font-bold tracking-tight mb-1">Executions</h1>
             <p className="text-muted-foreground">Monitor and manage workflow executions</p>
           </div>
           <Link to="/command-center"><Button><Play className="h-4 w-4 mr-2" />New Execution</Button></Link>
@@ -223,13 +365,13 @@ export function ExecutionsPage() {
 
         <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
           {statusCards.map((stat) => (
-            <Card key={stat.label}>
-              <CardContent className="p-4">
+            <Card key={stat.label} className="glass-card hover:border-primary/50 transition-premium">
+              <CardContent className="p-5 flex flex-col justify-between h-full gap-2">
                 <div className="flex items-center gap-3">
                   <stat.icon className={`h-8 w-8 ${stat.color}`} />
                   <div>
                     <p className="text-2xl font-bold">{stat.value}</p>
-                    <p className="text-sm text-muted-foreground">{stat.label}</p>
+                    <p className="text-sm font-medium text-muted-foreground">{stat.label}</p>
                   </div>
                 </div>
               </CardContent>
@@ -237,12 +379,12 @@ export function ExecutionsPage() {
           ))}
         </div>
 
-        <Card>
-          <CardHeader>
+        <Card className="glass-card overflow-hidden">
+          <CardHeader className="p-6 border-b border-border/50">
             <CardTitle>Execution History</CardTitle>
             <CardDescription>Daily workflow executions over the past week</CardDescription>
           </CardHeader>
-          <CardContent>
+          <CardContent className="p-6">
             <ResponsiveContainer width="100%" height={200}>
               <AreaChart data={chartData}>
                 <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
@@ -256,12 +398,12 @@ export function ExecutionsPage() {
         </Card>
 
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          <Card>
-            <CardHeader>
+          <Card className="glass-card">
+            <CardHeader className="p-6 border-b border-border/50">
               <CardTitle>All Executions</CardTitle>
               <CardDescription>Click to view details</CardDescription>
             </CardHeader>
-            <CardContent>
+            <CardContent className="p-6">
               <div className="flex gap-2 mb-4">
                 <div className="relative flex-1">
                   <Search className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
@@ -365,12 +507,12 @@ export function ExecutionsPage() {
             </CardContent>
           </Card>
 
-          <Card>
-            <CardHeader>
+          <Card className="glass-card">
+            <CardHeader className="p-6 border-b border-border/50">
               <CardTitle>Execution Details</CardTitle>
               {selectedExecution && <CardDescription>{selectedExecution.workflows?.name || 'Unknown Workflow'} - {selectedExecution.id.substring(0, 8)}...</CardDescription>}
             </CardHeader>
-            <CardContent>
+            <CardContent className="p-6">
               {selectedExecution ? (
                 <div className="space-y-6">
                   <div className="grid grid-cols-2 gap-y-4 gap-x-6">
@@ -560,23 +702,21 @@ export function ExecutionsPage() {
                           </div>
                         </div>
                         
+                        {report.finalOutput && Object.keys(report.finalOutput).length > 0 && (
+                          <div className="mb-4">
+                            <p className="text-sm font-semibold mb-2 flex items-center gap-2">
+                              <CheckCircle className="h-4 w-4 text-green-500" /> Final Workflow Output
+                            </p>
+                            <div className="p-3 bg-muted/20 border rounded-lg shadow-sm">
+                               <OutputViewer data={report.finalOutput} />
+                            </div>
+                          </div>
+                        )}
+                        
                         <div className="space-y-3">
                           <p className="text-xs font-medium text-muted-foreground">Node Details</p>
                           {report.nodes.map((n: any, idx: number) => (
-                            <div key={n.id + idx} className={`p-3 rounded-md border ${n.status === 'failed' ? (n.ignored ? 'border-yellow-500/50 bg-yellow-500/10' : 'border-red-500/50 bg-red-500/10') : 'border-green-500/50 bg-green-500/10'}`}>
-                              <div className="flex justify-between items-center mb-1">
-                                <span className="font-medium text-sm">{n.name} <span className="text-xs text-muted-foreground ml-1">({n.type})</span></span>
-                                <Badge variant={n.status === 'failed' ? (n.ignored ? 'outline' : 'destructive') : 'default'} className={n.ignored ? 'text-yellow-600 border-yellow-500 bg-yellow-500/20' : ''}>
-                                  {n.status === 'failed' && n.ignored ? 'Ignored Failure' : n.status}
-                                </Badge>
-                              </div>
-                              <div className="flex justify-between items-center text-xs text-muted-foreground">
-                                <span>Duration: {n.startTime && n.endTime ? `${Math.round((new Date(n.endTime).getTime() - new Date(n.startTime).getTime()))}ms` : '-'}</span>
-                              </div>
-                              {n.error && (
-                                <p className="mt-2 text-xs font-mono text-red-500 break-words bg-background/80 p-2 rounded border border-red-500/20">{n.error}</p>
-                              )}
-                            </div>
+                            <NodeDetailsRow key={n.id + idx} node={n} />
                           ))}
                         </div>
                       </div>
@@ -596,7 +736,31 @@ export function ExecutionsPage() {
 
                   <div className="flex gap-2 border-b pb-4">
                     {selectedExecution.status === 'running' && <Button variant="outline" size="sm" onClick={() => handleCancel(selectedExecution)}><StopCircle className="h-4 w-4 mr-1" />Cancel</Button>}
-                    {selectedExecution.status === 'failed' && <Button variant="outline" size="sm" onClick={() => handleRetry(selectedExecution)}><RotateCcw className="h-4 w-4 mr-1" />Retry</Button>}
+                    {(selectedExecution.status === 'completed' || selectedExecution.status === 'failed') && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="gap-1.5 border-emerald-500/40 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/10"
+                        onClick={() => setViewerExecution(selectedExecution)}
+                      >
+                        <FileOutput className="h-4 w-4" />
+                        View Outputs
+                      </Button>
+                    )}
+                    {selectedExecution.status === 'failed' && (
+                      <>
+                        <Button variant="outline" size="sm" onClick={() => handleRetry(selectedExecution)}><RotateCcw className="h-4 w-4 mr-1" />Retry</Button>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="gap-1.5 border-violet-500/40 text-violet-500 hover:bg-violet-500/10"
+                          onClick={() => navigate(`/workflows/${selectedExecution.workflow_id}?doctor=${selectedExecution.id}`)}
+                        >
+                          <Stethoscope className="h-4 w-4" />
+                          Diagnose
+                        </Button>
+                      </>
+                    )}
                   </div>
 
                   <div className="pt-2">
@@ -679,6 +843,15 @@ export function ExecutionsPage() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      {/* Workflow Output Viewer */}
+      {viewerExecution && (
+        <WorkflowOutputViewer
+          execution={viewerExecution}
+          workflowName={viewerExecution.workflows?.name}
+          onClose={() => setViewerExecution(null)}
+        />
+      )}
     </div>
   );
 }

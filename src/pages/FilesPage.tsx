@@ -119,9 +119,9 @@ export function FilesPage() {
   return (
     <div className="space-y-6">
       <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="space-y-6">
-        <div className="flex items-center justify-between">
+        <div className="mb-8 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
           <div>
-            <h1 className="text-3xl font-bold">Files</h1>
+            <h1 className="text-3xl font-bold tracking-tight mb-1">Files</h1>
             <p className="text-muted-foreground">Manage your uploaded files</p>
           </div>
           <div>
@@ -134,8 +134,8 @@ export function FilesPage() {
         </div>
 
         {/* Storage usage bar */}
-        <Card className="bg-muted/50">
-          <CardContent className="p-4 flex items-center gap-4">
+        <Card className="glass-card mb-6">
+          <CardContent className="p-6 flex items-center gap-4">
             <HardDrive className="h-8 w-8 text-primary" />
             <div className="flex-1 space-y-1">
               <div className="flex justify-between text-sm">
@@ -177,9 +177,9 @@ export function FilesPage() {
               const FileIcon = getFileIcon(file.mime_type);
               const isImage = file.mime_type?.startsWith('image/');
               return (
-                <motion.div key={file.id} initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1 }} layout>
-                  <Card className="hover:shadow-lg transition-shadow">
-                    <CardContent className="p-4">
+                <motion.div key={file.id} initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} layout>
+                  <Card className="glass-card hover:border-primary/50 transition-premium">
+                    <CardContent className="p-5">
                       <div className="flex items-start justify-between mb-3">
                         <div className="p-2 rounded-lg bg-primary/10">
                           <FileIcon className="h-6 w-6 text-primary" />

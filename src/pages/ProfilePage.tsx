@@ -81,14 +81,16 @@ export function ProfilePage() {
   return (
     <div className="space-y-6 max-w-2xl">
       <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="space-y-6">
-        <div>
-          <h1 className="text-3xl font-bold">Profile</h1>
-          <p className="text-muted-foreground">Your account information</p>
+        <div className="mb-8 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+          <div>
+            <h1 className="text-3xl font-bold tracking-tight mb-1">Profile</h1>
+            <p className="text-muted-foreground">Your account information</p>
+          </div>
         </div>
 
         {/* Profile Header */}
-        <Card>
-          <CardContent className="pt-6">
+        <Card className="glass-card">
+          <CardContent className="p-6">
             <div className="flex items-center gap-6">
               <div className="relative">
                 <Avatar className="h-20 w-20">
@@ -119,8 +121,8 @@ export function ProfilePage() {
 
         {/* Details */}
         <div className="grid grid-cols-2 gap-4">
-          <Card>
-            <CardContent className="pt-6">
+          <Card className="glass-card">
+            <CardContent className="p-6">
               <div className="flex items-center gap-3">
                 <div className="p-2 rounded-lg bg-blue-500/10">
                   <Mail className="h-5 w-5 text-blue-500" />
@@ -132,8 +134,8 @@ export function ProfilePage() {
               </div>
             </CardContent>
           </Card>
-          <Card>
-            <CardContent className="pt-6">
+          <Card className="glass-card">
+            <CardContent className="p-6">
               <div className="flex items-center gap-3">
                 <div className="p-2 rounded-lg bg-green-500/10">
                   <Shield className="h-5 w-5 text-green-500" />
@@ -145,8 +147,8 @@ export function ProfilePage() {
               </div>
             </CardContent>
           </Card>
-          <Card>
-            <CardContent className="pt-6">
+          <Card className="glass-card">
+            <CardContent className="p-6">
               <div className="flex items-center gap-3">
                 <div className="p-2 rounded-lg bg-purple-500/10">
                   <Calendar className="h-5 w-5 text-purple-500" />
@@ -206,11 +208,11 @@ export function ProfilePage() {
 
         {/* Company Info */}
         {profile && (
-          <Card>
-            <CardHeader>
+          <Card className="glass-card">
+            <CardHeader className="p-6 border-b border-border/50">
               <CardTitle>Company Information</CardTitle>
             </CardHeader>
-            <CardContent>
+            <CardContent className="p-6">
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <p className="text-sm text-muted-foreground">Company</p>

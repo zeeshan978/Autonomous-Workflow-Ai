@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useAuth } from '@/hooks/useAuth';
 import { motion } from 'framer-motion';
-import { Bell, CheckCheck, Trash2, AlertCircle, Info, AlertTriangle, CheckCircle } from 'lucide-react';
+import { Bell, CheckCheck, Trash2, AlertCircle, Info, AlertTriangle, CheckCircle, Mail } from 'lucide-react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -128,9 +128,9 @@ export function NotificationsPage() {
   return (
     <div className="space-y-6">
       <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="space-y-6">
-        <div className="flex items-center justify-between">
+        <div className="mb-8 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
           <div>
-            <h1 className="text-3xl font-bold">Notifications</h1>
+            <h1 className="text-3xl font-bold tracking-tight mb-1">Notifications</h1>
             <p className="text-muted-foreground">Stay updated with alerts</p>
           </div>
           <div className="flex items-center gap-3">
@@ -154,25 +154,31 @@ export function NotificationsPage() {
         </div>
 
         <div className="grid grid-cols-3 gap-4 mb-6">
-          <Card>
-            <CardContent className="p-4 text-center">
-              <Bell className="h-8 w-8 mx-auto text-blue-500 mb-2" />
+          <Card className="glass-card transition-premium hover:border-primary/50">
+            <CardContent className="p-5 text-center">
+              <div className="p-3 bg-blue-500/10 rounded-full inline-block mb-3">
+                <Bell className="h-6 w-6 text-blue-500" />
+              </div>
               <p className="text-2xl font-bold">{notifications.length}</p>
-              <p className="text-sm text-muted-foreground">Total</p>
+              <p className="text-sm font-medium text-muted-foreground">Total</p>
             </CardContent>
           </Card>
-          <Card>
-            <CardContent className="p-4 text-center">
-              <AlertCircle className="h-8 w-8 mx-auto text-amber-500 mb-2" />
+          <Card className="glass-card transition-premium hover:border-primary/50">
+            <CardContent className="p-5 text-center">
+              <div className="p-3 bg-amber-500/10 rounded-full inline-block mb-3">
+                <Mail className="h-6 w-6 text-amber-500" />
+              </div>
               <p className="text-2xl font-bold">{unreadNotifications.length}</p>
-              <p className="text-sm text-muted-foreground">Unread</p>
+              <p className="text-sm font-medium text-muted-foreground">Unread</p>
             </CardContent>
           </Card>
-          <Card>
-            <CardContent className="p-4 text-center">
-              <CheckCircle className="h-8 w-8 mx-auto text-green-500 mb-2" />
-              <p className="text-2xl font-bold">{readNotifications.length}</p>
-              <p className="text-sm text-muted-foreground">Read</p>
+          <Card className="glass-card transition-premium hover:border-primary/50">
+            <CardContent className="p-5 text-center">
+              <div className="p-3 bg-red-500/10 rounded-full inline-block mb-3">
+                <AlertCircle className="h-6 w-6 text-red-500" />
+              </div>
+              <p className="text-2xl font-bold">{notifications.filter(n => n.type === 'error').length}</p>
+              <p className="text-sm font-medium text-muted-foreground">Errors</p>
             </CardContent>
           </Card>
         </div>
